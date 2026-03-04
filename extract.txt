@@ -1,0 +1,579 @@
+pixel-agents
+UI LOGIC & BEHAVIOURAL PATTERN EXTRACTION
+github.com/pablodelucca/pixel-agents
+Complete reference for adapting this engine to the Pixel Trading Firm
+1. WHAT THIS REPO ACTUALLY IS
+pixel-agents is a VS Code extension that renders a live pixel art office inside a VSCode webview panel. Each Claude AI agent session running in a terminal is represented as a pixel character walking around a top-down office environment. The characters react in real time to what their AI agent is doing — typing when working, wandering when idle, showing speech bubbles when waiting for permission.
+The rendering engine is a pure HTML5 Canvas game loop — no Phaser, no game engine library. It is written entirely in vanilla TypeScript using requestAnimationFrame, a custom sprite renderer, BFS pathfinding, and a finite-state machine for character behaviour.
+KEY INSIGHT FOR THE TRADING FIRM: This repo proves the entire pixel office engine can be built without Phaser. The approach is lighter, faster to understand, and gives complete control over every pixel. The trading firm frontend should follow the same canvas-first, no-game-engine pattern.
+2. ARCHITECTURE OVERVIEW
+2.1 Stack
+Layer
+Technology
+Notes
+UI Framework
+React 18 (TSX)
+Thin shell — only manages layout and overlay HTML
+Pixel Rendering
+Raw HTML5 Canvas + requestAnimationFrame
+No game engine. Full custom renderer.
+State Machine
+Plain TypeScript class (OfficeState)
+Mutable, lives outside React. Updated imperatively.
+Message Bus
+window.addEventListener('message')
+VSCode postMessage — maps directly to WebSocket for web app
+Pathfinding
+BFS on 4-connected grid
+Custom implementation in tileMap.ts
+Sprites
+2D string arrays (hex colors)
+SpriteData = string[][] — each cell is a hex color or empty
+Font
+FSPixelSansUnicode-Regular.ttf
+Embedded pixel font for all UI text
+Build
+Vite + esbuild
+Standard modern TS build
+2.2 The Two-Layer Pattern
+The most important architectural pattern in this repo is the clean separation between the canvas layer and the HTML overlay layer. These two layers are always kept separate and never mixed:
+CANVAS LAYER — The Phaser/game canvas renders all pixel art: floor tiles, furniture, character sprites, speech bubbles, selection outlines. No HTML inside the canvas.
+HTML OVERLAY LAYER — React components positioned absolutely over the canvas render all text labels, tool status badges, status dots, and close buttons. These are standard DOM elements with CSS, positioned using the character's world coordinates converted to screen coordinates each frame via requestAnimationFrame.
+This is the critical pattern to copy. The ToolOverlay component runs its own RAF loop, recalculates every character's screen position each frame from world coordinates, and repositions the HTML elements accordingly. Characters move smoothly on canvas; labels follow in DOM. This is cleaner than trying to render text on canvas.
+3. THE GAME LOOP
+gameLoop.ts implements the standard game loop pattern using requestAnimationFrame. It is minimal and clean — 38 lines total.
+// Pattern: startGameLoop(canvas, { update, render }) → cleanup fn
+const frame = (time: number) => {
+  const dt = Math.min((time - lastTime) / 1000, MAX_DELTA_TIME_SEC)  // capped at 0.1s
+  lastTime = time
+  callbacks.update(dt)      // advance all character state machines
+  ctx.imageSmoothingEnabled = false  // CRITICAL: keep pixel art sharp
+  callbacks.render(ctx)     // draw everything
+  rafId = requestAnimationFrame(frame)
+}
+// Returns a cleanup function: () => { stopped = true; cancelAnimationFrame(rafId) }
+dt is always in SECONDS not milliseconds — all speed constants use px/sec and sec units throughout
+MAX_DELTA_TIME_SEC = 0.1 — caps the delta time to prevent huge jumps after tab switch or debugger pause
+imageSmoothingEnabled = false is set on EVERY frame, not just once — browsers sometimes reset it
+The loop returns a cleanup function called in useEffect return for proper React unmount handling
+4. CHARACTER FINITE STATE MACHINE
+Each character has exactly three states. The FSM is implemented in characters.ts as a switch statement inside the updateCharacter() function, called once per character per frame.
+4.1 States
+State
+Constant
+Description
+Animation
+TYPE
+CharacterState.TYPE
+Sitting at desk, actively working
+2-frame typing cycle at 0.3s/frame
+IDLE
+CharacterState.IDLE
+Standing, deciding where to wander
+Static pose (frame 0 of walk)
+WALK
+CharacterState.WALK
+Moving along a BFS path
+4-frame walk cycle at 0.15s/frame
+4.2 State Transitions
+// The full FSM transition logic:
+TYPE → IDLE:  when isActive becomes false AND seatTimer expires
+IDLE → WALK:  when wanderTimer expires, picks random walkable tile and pathfinds
+IDLE → WALK:  when isActive becomes true, pathfinds to assigned seat
+WALK → TYPE:  when path complete AND arrived at assigned seat AND isActive
+WALK → IDLE:  when path complete AND not at seat (wander move complete)
+WALK → TYPE:  when path complete AND arrived at seat while inactive (rest before wandering)
+// Key flags on Character object:
+ch.isActive      // true = agent is working, false = idle/wandering
+ch.seatId        // assigned desk seat uid, or null
+ch.path          // remaining BFS path steps as {col, row}[]
+ch.wanderTimer   // countdown until next wander decision
+ch.wanderCount   // moves made in current roaming cycle
+ch.wanderLimit   // max moves before returning to seat for rest
+ch.seatTimer     // time to rest at seat before wandering again (2-4 minutes)
+4.3 The Wander System
+When a character goes inactive (agent stops working) it does not immediately stand up and wander. It follows this sequence:
+On setAgentActive(false): seatTimer is set to -1 as a sentinel (meaning 'just ended turn')
+While seatTimer > 0: stays seated at desk even though inactive
+When seatTimer expires: transitions to IDLE, sets wanderTimer to 2-20 seconds
+Each time wanderTimer expires: pathfinds to random walkable tile, increments wanderCount
+When wanderCount >= wanderLimit (3-6 moves): pathfinds back to own seat, rests for 2-4 minutes
+This creates realistic office behaviour — agents work, occasionally wander, return to desk, repeat
+4.4 Re-pathing on State Change
+When an agent becomes active mid-walk (wander interrupted by new work), the WALK case checks:
+// In WALK state update, every frame:
+if (ch.isActive && ch.seatId) {
+  const seat = seats.get(ch.seatId)
+  const lastStep = ch.path[ch.path.length - 1]
+  if (!lastStep || lastStep.col !== seat.seatCol || lastStep.row !== seat.seatRow) {
+    // Currently walking somewhere else — repath to seat immediately
+    const newPath = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, ...)
+    if (newPath.length > 0) {
+      ch.path = newPath  // replace current path mid-walk
+      ch.moveProgress = 0
+    }
+  }
+}
+// Result: agent smoothly redirects to desk the moment work starts
+5. MOVEMENT & PATHFINDING
+5.1 Tile-Based Movement with Pixel Interpolation
+Characters move tile-by-tile but interpolate smoothly between tiles. The movement is not purely tile-snapping — it produces fluid pixel motion.
+// moveProgress is 0→1 lerp between current tile and next tile
+ch.moveProgress += (WALK_SPEED_PX_PER_SEC / TILE_SIZE) * dt
+// WALK_SPEED_PX_PER_SEC = 48, TILE_SIZE = 16 → crosses one tile in 0.333 seconds
+const fromCenter = tileCenter(ch.tileCol, ch.tileRow)   // {x, y} in pixels
+const toCenter   = tileCenter(nextTile.col, nextTile.row)
+const t = Math.min(ch.moveProgress, 1)
+ch.x = fromCenter.x + (toCenter.x - fromCenter.x) * t  // linear interpolation
+ch.y = fromCenter.y + (toCenter.y - fromCenter.y) * t
+if (ch.moveProgress >= 1) {
+  // Snap to tile center, advance path
+  ch.tileCol = nextTile.col
+  ch.tileRow = nextTile.row
+  ch.path.shift()          // remove completed step
+  ch.moveProgress = 0
+}
+5.2 BFS Pathfinding
+findPath() in tileMap.ts implements standard BFS on a 4-connected grid (no diagonals). Key implementation details:
+Blocked tiles are stored as a Set<string> of 'col,row' keys — O(1) lookup
+Own seat tile is temporarily removed from blockedTiles before pathfinding so character can reach it
+End tile must be walkable — if a seat tile is blocked by furniture, no path is returned
+Returns path EXCLUDING start tile, INCLUDING end tile
+Empty path = already at destination or no path exists
+// Blocked tiles are furniture footprints registered at layout build time
+// Pattern: 'col,row' string keys in a Set
+const blockedTiles = new Set<string>(['3,2', '4,2', '3,3'])  // desk footprint example
+// Temporarily unblock own seat (character should be able to sit in it):
+if (key) this.blockedTiles.delete(key)  // remove own seat
+const path = findPath(...)               // pathfind
+if (key) this.blockedTiles.add(key)      // restore
+6. RENDER PIPELINE
+renderFrame() in renderer.ts is the single function called each frame. It runs a specific sequence every time:
+// renderFrame() call order — strict sequence every frame:
+1. ctx.clearRect(0, 0, w, h)              // clear canvas
+2. Calculate offsetX/Y to center map in viewport + pan
+3. renderTileGrid()                        // draw floor + wall base colors
+4. renderSeatIndicators()                  // colored tile overlays (blue/green/red)
+5. Build wall instances for z-sorting
+6. renderScene()                           // furniture + characters, Z-SORTED
+7. renderBubbles()                         // speech bubbles ALWAYS on top
+8. Editor overlays if in edit mode         // grid, ghost preview, selection
+6.1 Z-Sorting
+Everything in the scene — furniture, wall sprites, and characters — is z-sorted together into a single drawables array. This is how characters appear behind desks when walking behind them and in front when walking in front.
+// Z-sort pattern: collect all drawables with a zY value, then sort
+interface ZDrawable {
+  zY: number          // the Y world-coordinate used for depth sorting
+  draw: (ctx) => void // the actual draw call as a closure
+}
+// Character zY = bottom of character tile + small offset:
+const charZY = ch.y + TILE_SIZE / 2 + CHARACTER_Z_SORT_OFFSET  // +0.5
+// Furniture zY is set at layout build time (typically bottom edge of footprint)
+drawables.sort((a, b) => a.zY - b.zY)  // lower Y = further back = drawn first
+for (const d of drawables) d.draw(ctx)  // draw in order
+6.2 Sprite Rendering
+SpriteData is a 2D string array: string[][]. Each cell is a hex color string like '#FF4400' or an empty string '' for transparent. Sprites are rendered pixel-by-pixel using fillRect at 1×zoom size per cell.
+// SpriteData = string[][]  (rows × cols of hex color strings)
+// '' = transparent, '#RRGGBB' = solid pixel
+// Sprites are cached as ImageBitmap at each zoom level (spriteCache.ts):
+function getCachedSprite(sprite: SpriteData, zoom: number): ImageBitmap {
+  const key = `${spriteId}@${zoom}`
+  if (cache.has(key)) return cache.get(key)
+  // Rasterize sprite to offscreen canvas at zoom scale
+  // Store as ImageBitmap for fast drawImage() calls
+}
+// Characters are anchored BOTTOM-CENTER:
+const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
+const drawY = Math.round(offsetY + ch.y * zoom - cached.height)
+// Note: Math.round to prevent sub-pixel blurring on pixel art
+6.3 Selection Outline
+When a character is selected or hovered, a white outline sprite is drawn just before the character sprite in the z-order. The outline is pre-computed from the sprite (1 pixel expanded in all directions) and cached separately.
+// Outline drawn at: charZY - OUTLINE_Z_SORT_OFFSET (0.001)
+// This places it just below the character in sort order = drawn just before
+const outlineAlpha = isSelected ? 1.0 : 0.5  // selected=full, hover=50%
+const olDrawX = drawX - zoom  // 1 sprite-pixel offset, scaled
+const olDrawY = drawY - zoom
+ctx.save()
+ctx.globalAlpha = outlineAlpha
+ctx.drawImage(outlineCached, olDrawX, olDrawY)
+ctx.restore()
+7. THE MATRIX SPAWN/DESPAWN EFFECT
+When agents are added or removed from the office, their characters appear/disappear with a Matrix digital rain effect. This is the most visually distinctive animation in the codebase.
+7.1 How It Works
+On spawn: a green 'rain' sweep moves down the sprite from top to bottom, revealing the character pixel by pixel
+On despawn: the same sweep moves down, consuming and erasing pixels behind it
+Duration: 0.3 seconds total (MATRIX_EFFECT_DURATION_SEC)
+Each column (16 total) has a random stagger offset (0-0.3 of total duration) so columns don't all start simultaneously
+A hash-based flicker function creates a shimmer — ~70% of trail pixels are visible at any given frame
+7.2 Effect State on Character
+// Added to Character object:
+ch.matrixEffect:       'spawn' | 'despawn' | null
+ch.matrixEffectTimer:  number    // counts UP from 0 to MATRIX_EFFECT_DURATION
+ch.matrixEffectSeeds:  number[]  // 16 random values [0-1] for column stagger
+// In officeState.update():
+if (ch.matrixEffect) {
+  ch.matrixEffectTimer += dt
+  if (ch.matrixEffectTimer >= MATRIX_EFFECT_DURATION) {
+    if (ch.matrixEffect === 'spawn') {
+      ch.matrixEffect = null  // clear effect, resume normal FSM
+    } else {
+      toDelete.push(ch.id)   // despawn complete — remove character
+    }
+  }
+  continue  // SKIP normal FSM while effect is active
+}
+7.3 Render Logic
+// Per-pixel rendering during effect (replaces normal drawImage):
+const progress = ch.matrixEffectTimer / MATRIX_EFFECT_DURATION  // 0→1
+const totalSweep = ROWS + TRAIL_LENGTH  // 24 + 6 = 30
+for each col (0-15):
+  stagger = seeds[col] * 0.3  // 0-0.3 delay
+  colProgress = (progress - stagger) / 0.7  // normalized 0→1
+  headRow = colProgress * totalSweep  // current sweep position
+  for each row (0-23):
+    distFromHead = headRow - row
+    if distFromHead < 0:  // above head
+      spawn: invisible    despawn: draw original pixel
+    if distFromHead < 1:  // head
+      draw bright white-green '#ccffcc'
+    if distFromHead < TRAIL_LENGTH:  // trail
+      spawn: draw pixel + fading green overlay
+      despawn: draw fading green only (pixel consumed)
+    else:  // below trail
+      spawn: draw original pixel (fully revealed)
+      despawn: nothing (consumed)
+8. SPEECH BUBBLES
+Characters show pixel speech bubbles for two states: waiting for input and requesting permission. These are rendered on the canvas, above all other sprites, after the main z-sorted scene.
+Bubble Type
+Trigger
+Duration
+Fade
+permission
+Agent requests tool permission
+Permanent until dismissed
+Instant on click
+waiting
+Agent finished turn, waiting for input
+2.0 seconds countdown
+Fades over last 0.5s
+// Bubble position — centered above character head:
+const sittingOff = ch.state === CharacterState.TYPE ? BUBBLE_SITTING_OFFSET_PX : 0
+const bubbleX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
+const bubbleY = Math.round(offsetY + (ch.y + sittingOff - BUBBLE_VERTICAL_OFFSET_PX) * zoom - cached.height - zoom)
+// Opacity for waiting bubble:
+let alpha = 1.0
+if (bubbleType === 'waiting' && bubbleTimer < BUBBLE_FADE_DURATION_SEC) {
+  alpha = bubbleTimer / BUBBLE_FADE_DURATION_SEC  // 0.5s fade out
+}
+ctx.save()
+if (alpha < 1.0) ctx.globalAlpha = alpha
+ctx.drawImage(cached, bubbleX, bubbleY)
+ctx.restore()
+9. THE HTML OVERLAY LAYER — ToolOverlay
+ToolOverlay is a React component that renders pure HTML <div> elements positioned over the canvas. It runs its own requestAnimationFrame loop to keep position in sync with character movement — this is the key technique for combining canvas with DOM overlays.
+// ToolOverlay runs its own RAF loop — NOT tied to the game loop:
+useEffect(() => {
+  let rafId = 0
+  const tick = () => {
+    setTick(n => n + 1)  // force React re-render every frame
+    rafId = requestAnimationFrame(tick)
+  }
+  rafId = requestAnimationFrame(tick)
+  return () => cancelAnimationFrame(rafId)
+}, [])
+// Each frame, convert world coords to screen coords:
+const dpr = window.devicePixelRatio || 1
+const deviceOffsetX = Math.floor((canvasW - mapW) / 2) + Math.round(panRef.current.x)
+const screenX = (deviceOffsetX + ch.x * zoom) / dpr  // divide by DPR for CSS pixels
+const screenY = (deviceOffsetY + (ch.y + sittingOffset - TOOL_OVERLAY_VERTICAL_OFFSET) * zoom) / dpr
+// Render as absolute-positioned div:
+<div style={{ position: 'absolute', left: screenX, top: screenY - 24, transform: 'translateX(-50%)' }}>
+  <div style={{ background: 'var(--pixel-bg)', border: '2px solid ...', borderRadius: 0 }}>
+    <span className={isActive ? 'pixel-agents-pulse' : undefined}>●</span>
+    <span>{activityText}</span>
+  </div>
+</div>
+9.1 Activity Text Logic
+The label shown above each character is derived from the agent's tool state using getActivityText():
+function getActivityText(agentId, agentTools, isActive): string {
+  const tools = agentTools[agentId]
+  if (tools && tools.length > 0) {
+    // Latest non-done tool:
+    const activeTool = [...tools].reverse().find(t => !t.done)
+    if (activeTool) {
+      if (activeTool.permissionWait) return 'Needs approval'
+      return activeTool.status  // e.g. 'Read file: config.py'
+    }
+    // All tools done but agent still active (between tool calls):
+    if (isActive) return tools[tools.length - 1].status  // show last
+  }
+  return 'Idle'
+}
+9.2 Status Dot Colors
+// Three possible dot states:
+if (hasPermission)              dotColor = 'var(--pixel-status-permission)'  // orange
+else if (isActive && hasTools)  dotColor = 'var(--pixel-status-active)'      // green
+else                            dotColor = null  // no dot shown
+// Pulse animation when active (not permission):
+<span className={isActive && !hasPermission ? 'pixel-agents-pulse' : undefined} />
+// CSS keyframes defined inline in App.tsx:
+@keyframes pixel-agents-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+animation: pixel-agents-pulse 1.5s ease-in-out infinite
+10. THE MESSAGE BUS PATTERN
+The repo uses VSCode's postMessage API as its message bus. This maps directly to WebSocket events in a web app. The pattern in useExtensionMessages.ts is exactly how the Trading Firm frontend should handle incoming WebSocket events.
+10.1 Message → State → Canvas Pipeline
+// The complete data flow for a message arriving:
+window.addEventListener('message', handler)  // or ws.onmessage
+  ↓
+const os = getOfficeState()  // get the mutable game state object
+  ↓
+os.setAgentActive(id, true)  // mutate game state imperatively
+os.setAgentTool(id, toolName)
+os.clearPermissionBubble(id)
+  ↓
+setAgentTools(prev => ...)   // also update React state for overlays
+  ↓
+// Canvas game loop reads os.characters on next frame automatically
+// ToolOverlay re-renders on next RAF tick automatically
+// No manual 'notify canvas to redraw' needed
+10.2 Complete Message Type Registry
+Message Type
+Canvas Effect
+React State Effect
+layoutLoaded
+os.rebuildFromLayout() — rebuild tilemap, seats, furniture
+setLayoutReady(true)
+agentCreated
+os.addAgent() — spawn character with matrix effect
+setAgents([...prev, id])
+agentClosed
+os.removeAgent() — despawn with matrix effect
+Remove from all state maps
+existingAgents
+Buffer until layoutLoaded, then addAgent() for each
+setAgents(merged sorted list)
+agentToolStart
+os.setAgentActive(true) + os.setAgentTool(toolName)
+Add tool to agentTools
+agentToolDone
+No canvas effect
+Mark tool as done
+agentToolsClear
+os.setAgentTool(null) + clearPermissionBubble()
+Delete all tools for agent
+agentStatus (active)
+os.setAgentActive(true)
+Remove status entry
+agentStatus (waiting)
+os.setAgentActive(false) + showWaitingBubble()
+Set status entry
+agentToolPermission
+os.showPermissionBubble(id)
+Mark tool permissionWait=true
+agentToolPermissionClear
+os.clearPermissionBubble(id)
+Clear permissionWait flags
+characterSpritesLoaded
+setCharacterTemplates() — load sprite palette data
+None
+floorTilesLoaded
+setFloorSprites() — load floor tile patterns
+None
+wallTilesLoaded
+setWallSprites() — load wall tile patterns
+None
+10.3 The Layout Buffering Pattern
+A subtle but important pattern: agents that arrive before the layout is loaded are buffered, not added immediately. This prevents characters from being placed before the tile map and seat positions are known.
+// On existingAgents message: buffer agents, do NOT add to canvas yet
+pendingAgents.push({ id, palette, hueShift, seatId, folderName })
+// On layoutLoaded message:
+os.rebuildFromLayout(layout)  // seats are now valid
+for (const p of pendingAgents) {
+  os.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.folderName)
+}
+pendingAgents = []  // clear buffer
+// Trading Firm equivalent:
+// Buffer agent additions until office layout/WebSocket initial state is ready
+11. OFFICESTATE — THE MUTABLE GAME STATE CLASS
+OfficeState is the central state object. It lives outside React (instantiated at module level) and is mutated imperatively by message handlers. React only reads from it via the game loop render function and the ToolOverlay RAF loop.
+11.1 State Properties
+class OfficeState {
+  layout: OfficeLayout             // grid dimensions, tile types, furniture placement
+  tileMap: TileType[][]            // 2D grid of tile types (WALL/FLOOR/VOID)
+  seats: Map<string, Seat>         // seatId → {seatCol, seatRow, facingDir, assigned}
+  blockedTiles: Set<string>        // 'col,row' keys blocked by furniture
+  furniture: FurnitureInstance[]   // rendered furniture with pixel positions
+  walkableTiles: {col,row}[]       // pre-computed list of walkable tiles for wander
+  characters: Map<number, Character>  // agentId → Character
+  selectedAgentId: number | null   // currently selected (outlined) character
+  cameraFollowId: number | null    // camera lerps to follow this character
+  hoveredAgentId: number | null    // hovered character (lighter outline)
+  hoveredTile: {col,row} | null    // for seat indicator rendering
+  subagentIdMap: Map<string, number>   // 'parentId:toolId' → sub-char id
+  subagentMeta: Map<number, {...}>     // sub-char id → parent info
+}
+11.2 Auto-On Electronics Pattern
+When an agent becomes active, the furniture items in front of their desk automatically switch to an 'on' state (monitor lights up, etc.). This is rebuilt every time setAgentActive() is called.
+// setAgentActive() calls rebuildFurnitureInstances() every time
+// rebuildFurnitureInstances() checks which tiles active agents face:
+for each active agent with a seat:
+  facing direction → compute which tile(s) the desk occupies
+  mark those tiles as 'autoOn'
+for each furniture item:
+  if any of its footprint tiles are in autoOn set:
+    replace with the 'on' version of that furniture type
+    e.g. 'pc' → 'pc_on', 'monitor' → 'monitor_on'
+// For the Trading Firm: agent's desk monitor should glow when their
+// agent is active (processing a signal). Same pattern, different trigger.
+11.3 Palette & Hue Shift System
+With 6 base character palettes and a hue shift system, the office can have many visually distinct characters without explicitly managing each one's appearance.
+// pickDiversePalette() assigns appearance to new characters:
+// Round 1 (first 6 agents): each gets a unique base palette (0-5), no hue shift
+// Round 2+ (7th agent onward): reuse least-used palette + random hue shift ≥45°
+PALETTE_COUNT = 6         // base skin tones
+HUE_SHIFT_MIN_DEG = 45    // minimum shift to ensure visual difference
+HUE_SHIFT_RANGE_DEG = 271 // shift range (45° to 316°)
+// For Trading Firm: 9 agents = 6 unique + 3 with hue shifts
+// Consider assigning fixed palettes per agent division instead:
+// Intelligence = warm tones, Command = cool tones, Execution = green, Review = gold
+12. CSS VARIABLES — THE THEMING SYSTEM
+The entire UI uses CSS custom properties (variables) for all colors, borders, shadows, and z-indices. No hardcoded colors in component styles. This is how the dark terminal aesthetic is applied consistently.
+/* From index.css — all theme values as CSS vars */
+--pixel-bg:                  /* main dark background */
+--pixel-border:              /* default border color */
+--pixel-border-light:        /* selected state border */
+--pixel-text-dim:            /* dimmed text */
+--pixel-btn-bg:              /* button background */
+--pixel-btn-disabled-opacity:/* disabled button opacity */
+--pixel-shadow:              /* box-shadow for panels */
+--pixel-vignette:            /* radial gradient overlay for depth */
+--pixel-accent:              /* highlight color */
+--pixel-status-active:       /* green dot for working agents */
+--pixel-status-permission:   /* orange dot for permission wait */
+--pixel-close-text:          /* × button color */
+--pixel-close-hover:         /* × button hover */
+--pixel-reset-text:          /* reset confirm text */
+--pixel-danger-bg:           /* danger/destructive action */
+--pixel-hint-bg:             /* keyboard hint badge */
+--pixel-controls-z:          /* z-index for controls layer */
+--pixel-overlay-z:           /* z-index for agent overlays */
+--pixel-overlay-selected-z:  /* z-index for selected agent overlay */
+For the Trading Firm: copy this CSS variable pattern exactly. Every color should be a var(). The dark terminal aesthetic works because of this system — changing the theme is a single CSS file edit, not hunting through components.
+13. CANVAS SETUP & DPR HANDLING
+The repo uses a specific technique for Retina/HiDPI display support that is important to copy correctly:
+// OfficeCanvas.tsx — canvas resize handler:
+const dpr = window.devicePixelRatio || 1
+canvas.width  = Math.round(rect.width  * dpr)  // backing store in device pixels
+canvas.height = Math.round(rect.height * dpr)
+canvas.style.width  = `${rect.width}px`         // CSS size in logical pixels
+canvas.style.height = `${rect.height}px`
+// NO ctx.scale(dpr, dpr) — render directly in device pixels instead
+// Why: ctx.scale() approach causes sub-pixel issues with pixel art.
+// Direct device pixel rendering + integer Math.round() = crisp pixels.
+// World → screen coordinate conversion accounts for DPR:
+const screenX = deviceCoord / dpr  // convert for CSS-positioned HTML overlays
+// ResizeObserver re-runs this on container resize:
+const observer = new ResizeObserver(() => resizeCanvas())
+observer.observe(containerRef.current)
+14. CAMERA SYSTEM
+The camera is implemented as a panX/panY offset plus a zoom level. The map is always centered in the viewport, with pan applied on top. Camera follow smoothly lerps toward the selected character.
+// Center map in viewport:
+const mapW = layout.cols * TILE_SIZE * zoom
+const offsetX = Math.floor((canvasWidth - mapW) / 2) + Math.round(panRef.current.x)
+// Camera follow (runs every render frame in OfficeCanvas):
+if (officeState.cameraFollowId !== null) {
+  const followCh = officeState.characters.get(officeState.cameraFollowId)
+  const targetX = mapW / 2 - followCh.x * zoom  // pan that centers the character
+  const dx = targetX - panRef.current.x
+  if (Math.abs(dx) < CAMERA_FOLLOW_SNAP_THRESHOLD) {  // 0.5px
+    panRef.current = { x: targetX, y: targetY }  // snap when close
+  } else {
+    panRef.current.x += dx * CAMERA_FOLLOW_LERP  // lerp factor: 0.1
+  }
+}
+// Pan is stored in a ref (not state) to avoid React re-renders on every frame
+// Zoom stored in React state (triggers re-render when changed by user)
+15. ADAPTING THIS ENGINE FOR THE PIXEL TRADING FIRM
+15.1 What to Copy Directly
+The entire game loop pattern (gameLoop.ts) — use as-is
+The Character FSM (characters.ts) — use as-is, just add new states for trading-specific behaviour
+The BFS pathfinding (tileMap.ts) — use as-is
+The Z-sorting pattern from renderScene() — use as-is
+The Matrix spawn/despawn effect — use as-is for agent state changes
+The speech bubble pattern — repurpose for signal alerts and kill switch notifications
+The HTML overlay + RAF loop pattern from ToolOverlay — use for data panels and labels
+The CSS variable theming system — adopt the full variable list
+The canvas DPR handling from OfficeCanvas — use exactly as implemented
+The message buffering pattern (buffer until layout loaded)
+15.2 What to Replace
+VSCode postMessage → WebSocket ws.onmessage with the event router from Doc 2
+vscodeApi.ts → websocketClient.ts sending to FastAPI backend
+agentManager.ts (VSCode extension backend) → FastAPI backend with Zustand stores
+The 3-state FSM → extend with SIGNAL_FOUND, STAMPING, URGENT, HOLD, EXECUTING, REPORTING states
+Generic 'agentToolStart' messages → typed signal lifecycle events per our WebSocket schema
+15.3 New States to Add for Trading Firm
+New State
+Trigger Event
+Animation
+Which Agents
+SIGNAL_FOUND
+candidate_detected
+Stand up, memo float animation
+Agent 1, 4
+VERIFYING
+verification_started
+Examine document animation
+Agent 2
+STAMPING_GREEN
+token_cleared
+Green stamp + file float up
+Agent 2
+STAMPING_RED
+signal_killed
+Red stamp + trash can
+Agent 2
+URGENT
+wallet_buy_detected
+Stand up fast, URGENT envelope
+Agent 3
+AGGREGATING
+signal_received
+Cards arrange on table
+Agent 5
+CONFLUENCE
+threshold_reached
+Combine cards animation
+Agent 5
+HOLD_ACTIVE
+tier4_triggered
+Arms raised, HOLD sign
+Agent 6
+KILL_TRIGGERED
+kill_switch_triggered
+Button press + emergency lights
+Agent 7
+EXECUTING
+trade_approved
+Terminal flash animation
+Agent 8
+TP_HIT
+take_profit_hit
+Celebrate animation
+Agent 8
+STOPPED_OUT
+stop_loss_hit
+Slump animation
+Agent 8
+REPORTING
+weekly_report_due
+Print + deliver animation
+Agent 9
+15.4 Key Implementation Notes
+Keep OfficeState as a plain class outside React — do not put it in Zustand. Zustand is for React-readable state (inbox, trades, risk). The canvas game state stays imperative.
+The PhaserBridge pattern from Doc 3 is equivalent to: bridge.emit(event, payload) → registered scene listeners. In this no-Phaser approach, just call officeState methods directly from the WebSocket event router.
+The ToolOverlay RAF pattern can be used for the data panel overlays — keep them as HTML positioned over the canvas, not drawn on canvas.
+Floor 1, 2, 3 are three separate tile maps — three OfficeLayout objects. Switch between them using the FloorSelector which calls a different Phaser scene start. In this engine: stop the current game loop, load the next floor's layout into OfficeState, restart loop.
+The auto-on electronics pattern (monitors lighting up when agent is active) maps directly to agent desk monitors changing state when a trading signal arrives.
+pixel-agents UI extraction complete  —  github.com/pablodelucca/pixel-agents

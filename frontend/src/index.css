@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Retro RPG Color Palette */
+  --retro-bg: #8b9bb4;
+  /* Gameboy Advance gray-blue */
+  --retro-panel: #e0e0e0;
+  /* Light grey window background */
+  --retro-border-outer: #ffffff;
+  /* White outer highlight */
+  --retro-border-inner: #000000;
+  /* Black inner shadow */
+  --retro-text: #000000;
+  /* Black text */
+  --retro-text-muted: #555555;
+  --retro-success: #38bdf8;
+  /* Blue for success to match pokemon style */
+  --retro-danger: #ef4444;
+  --retro-warning: #facc15;
+}
+
+body {
+  background-color: var(--retro-bg);
+  color: var(--retro-text);
+  font-family: 'Press Start 2P', monospace;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  /* Prevent scrolling on the dashboard */
+}
+
+/* Base Pixel Font utility */
+.pixel-font {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  /* Classic pixel size */
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+h4,
+.title-font {
+  font-family: 'Press Start 2P', monospace;
+  letter-spacing: normal;
+}
+
+/* Retro RPG Window Panel */
+.rpg-panel {
+  background-color: var(--retro-panel);
+  border: 4px solid;
+  border-color: var(--retro-border-outer) var(--retro-border-inner) var(--retro-border-inner) var(--retro-border-outer);
+  padding: 12px;
+  color: var(--retro-text);
+  position: relative;
+  /* Add an inner border to simulate depth */
+  box-shadow: inset -2px -2px 0px rgba(0, 0, 0, 0.2), inset 2px 2px 0px rgba(255, 255, 255, 0.5);
+  image-rendering: pixelated;
+}
+
+/* Inset panel for data readouts */
+.rpg-inset {
+  background-color: #ffffff;
+  border: 4px solid;
+  border-color: var(--retro-border-inner) var(--retro-border-outer) var(--retro-border-outer) var(--retro-border-inner);
+  padding: 8px;
+  box-shadow: inset 2px 2px 0px rgba(0, 0, 0, 0.1);
+}
+
+/* Custom Scrollbar for retro panels */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--retro-panel);
+  border-left: 2px solid var(--retro-border-inner);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #a0a0a0;
+  border: 2px solid;
+  border-color: var(--retro-border-outer) var(--retro-border-inner) var(--retro-border-inner) var(--retro-border-outer);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #c0c0c0;
+}

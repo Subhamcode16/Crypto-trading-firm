@@ -1,0 +1,12 @@
+.env
+*.log
+__pycache__/
+node_modules/
+dist/
+build/
+.vscode/
+.idea/
+.DS_Store
+*.pyc
+.pytest_cache/
+planner_debug.log
