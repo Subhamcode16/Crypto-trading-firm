@@ -7,6 +7,7 @@ import { ScenarioMenu } from './components/panels/ScenarioMenu';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAgentStore } from './stores/useAgentStore';
 import { StatsDashboard } from './pages/StatsDashboard';
+import { routeEvent } from './logic/EventAdapter';
 
 // Extracted from original App.jsx
 function OfficeView() {
@@ -17,6 +18,8 @@ function OfficeView() {
 
   const handleTriggerScenario = (name) => {
     send({ type: 'RUN_SCENARIO', name });
+    // Also directly trigger FSM + bubbles locally for instant offline feedback
+    routeEvent({ event: name, agent_id: null, payload: {} });
   };
 
   return (

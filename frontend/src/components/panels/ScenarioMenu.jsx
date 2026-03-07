@@ -1,11 +1,16 @@
 import React from 'react';
-import { Play, Flame, TrendingDown, ShieldCheck } from 'lucide-react';
+import { TrendingDown, Flame, ShieldCheck, AlertTriangle, CheckCircle, XCircle, Wifi, WifiOff } from 'lucide-react';
 
 export const ScenarioMenu = ({ onTrigger }) => {
     const scenarios = [
-        { name: 'BTC_CRASH', icon: <TrendingDown size={14} />, label: 'MARKET_CRASH' },
-        { name: 'BIG_BUY', icon: <Flame size={14} />, label: 'WHALE_SIGNAL' },
-        { name: 'KILL_SWITCH_ACTIVE', icon: <ShieldCheck size={14} />, label: 'EMERGENCY' },
+        { name: 'ALL_AGENTS_ONLINE', icon: <Wifi size={14} />, label: 'ALL ONLINE', color: 'bg-emerald-100 text-emerald-800' },
+        { name: 'ALL_AGENTS_OFFLINE', icon: <WifiOff size={14} />, label: 'ALL OFFLINE', color: 'bg-gray-200 text-gray-600' },
+        { name: 'SIGNAL_FOUND', icon: <Flame size={14} />, label: 'SIGNAL FOUND', color: '' },
+        { name: 'BTC_CRASH', icon: <TrendingDown size={14} />, label: 'MARKET CRASH', color: '' },
+        { name: 'KILL_SWITCH_ACTIVE', icon: <ShieldCheck size={14} />, label: 'KILL SWITCH', color: '' },
+        { name: 'TRADE_EXECUTE', icon: <CheckCircle size={14} />, label: 'EXECUTE TRADE', color: '' },
+        { name: 'MACRO_RISK', icon: <AlertTriangle size={14} />, label: 'MACRO RISK', color: '' },
+        { name: 'SIGNAL_KILLED', icon: <XCircle size={14} />, label: 'SIGNAL KILLED', color: '' },
     ];
 
     return (
@@ -18,7 +23,7 @@ export const ScenarioMenu = ({ onTrigger }) => {
                     <button
                         key={s.name}
                         onClick={() => onTrigger(s.name)}
-                        className="flex items-center gap-3 px-3 py-2 bg-[#d0d0d0] border-2 border-white border-b-black border-r-black active:border-black active:border-b-white active:border-r-white text-black text-[8px] pixel-font transition-all"
+                        className={`flex items-center gap-3 px-3 py-2 border-2 border-white border-b-black border-r-black active:border-black active:border-b-white active:border-r-white text-black text-[8px] pixel-font transition-all ${s.color || 'bg-[#d0d0d0]'}`}
                     >
                         <span className="text-black">{s.icon}</span>
                         {s.label}

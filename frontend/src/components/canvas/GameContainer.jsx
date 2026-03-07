@@ -6,6 +6,10 @@ import { Renderer } from '../../engine/renderer';
 import { officeState } from '../../engine/officeState';
 import { useAgentStore } from '../../stores/useAgentStore';
 
+// Camera follow lerp factor (0.08 = smooth, 1.0 = instant)
+const CAMERA_LERP = 0.08;
+const CAMERA_SNAP_THRESHOLD = 0.5; // px — snap when this close
+
 export function GameContainer() {
     const canvasRef = useRef(null);
     const containerRef = useRef(null);
@@ -15,9 +19,12 @@ export function GameContainer() {
     const panRef = useRef({ x: 0, y: 0 });
     const zoom = 1.2;
 
+    // Cursor style: change to pointer when hovering an agent
+    const [cursor, setCursor] = useState('crosshair');
+
     const agents = useAgentStore((state) => state.agents);
 
-    // Sync Zustand Agents -> OfficeState and Global Names
+    // Sync Zustand Agents → OfficeState and Global Names
     useEffect(() => {
         const names = {};
         Object.values(agents).forEach(agent => {
@@ -47,6 +54,27 @@ export function GameContainer() {
         const callbacks = {
             update: (dt) => {
                 officeState.update(dt);
+
+                // ── Phase 3: Camera Follow ──────────────────────────────────────
+                if (officeState.cameraFollowId !== null) {
+                    const followCh = officeState.characters.get(officeState.cameraFollowId);
+                    if (followCh) {
+                        // Target pan that centers the character in the viewport
+                        const targetX = dimensions.width / 2 / zoom - followCh.x;
+                        const targetY = dimensions.height / 2 / zoom - followCh.y;
+
+                        const dx = targetX - panRef.current.x;
+                        const dy = targetY - panRef.current.y;
+
+                        if (Math.abs(dx) < CAMERA_SNAP_THRESHOLD && Math.abs(dy) < CAMERA_SNAP_THRESHOLD) {
+                            panRef.current.x = targetX;
+                            panRef.current.y = targetY;
+                        } else {
+                            panRef.current.x += dx * CAMERA_LERP;
+                            panRef.current.y += dy * CAMERA_LERP;
+                        }
+                    }
+                }
             },
             render: (ctx) => {
                 renderer.renderFrame(ctx, dimensions.width, dimensions.height, panRef.current, zoom);
@@ -57,25 +85,54 @@ export function GameContainer() {
         return cleanup;
     }, [dimensions]);
 
-    // Pan Input Handling
-    const handlePointerMove = (e) => {
-        if (e.buttons === 1) { // Left click drag
-            panRef.current.x += e.movementX / zoom;
-            panRef.current.y += e.movementY / zoom;
-        }
-        // Debug: track world coords
+    // ── World Space Helper ────────────────────────────────────────────────────
+    const toWorld = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         const cssX = e.clientX - rect.left;
         const cssY = e.clientY - rect.top;
-        const worldX = Math.round((cssX - panRef.current.x) / zoom);
-        const worldY = Math.round((cssY - panRef.current.y) / zoom);
+        return {
+            worldX: (cssX / zoom) - panRef.current.x,
+            worldY: (cssY / zoom) - panRef.current.y,
+        };
+    };
+
+    // ── Pan Input ─────────────────────────────────────────────────────────────
+    const handlePointerMove = (e) => {
+        if (e.buttons === 1) {
+            // Cancel camera follow when user pans manually
+            officeState.cameraFollowId = null;
+            panRef.current.x += e.movementX / zoom;
+            panRef.current.y += e.movementY / zoom;
+        }
+
+        // ── Phase 3: Hover Hit Test ────────────────────────────────────────────
+        const { worldX, worldY } = toWorld(e);
+        const hit = officeState.hitTestAgent(worldX, worldY);
+        officeState.hoverAgent(hit);
+        setCursor(hit !== null ? 'pointer' : 'crosshair');
+    };
+
+    // ── Phase 3: Click to Select ──────────────────────────────────────────────
+    const handlePointerClick = (e) => {
+        if (e.button !== 0) return; // Left click only
+        const { worldX, worldY } = toWorld(e);
+        const hit = officeState.hitTestAgent(worldX, worldY);
+        if (hit !== null) {
+            officeState.selectAgent(hit);
+        } else {
+            // Click on empty space — deselect and stop following
+            officeState.selectedAgentId = null;
+            officeState.cameraFollowId = null;
+        }
     };
 
     return (
         <div
             ref={containerRef}
-            className="absolute inset-0 w-full h-full overflow-hidden cursor-crosshair"
+            className="absolute inset-0 w-full h-full overflow-hidden"
+            style={{ cursor }}
             onPointerMove={handlePointerMove}
+            onClick={handlePointerClick}
         >
             <OfficeCanvas
                 ref={canvasRef}
