@@ -32,45 +32,49 @@ We have replaced the emotional trader with a **9-Agent Autonomous Firm**. This s
 
 ```mermaid
 graph TD
+    User((USER)) <-->|NLP Commands / Approvals| A0[Agent 0: Commander / CEO]
+    
     subgraph "Intelligence Division (Detection)"
-        A1[Agent 1: Researcher] -->|New Pairs| A2[Agent 2: Filter]
-        A2 -->|Safe CA| A3[Agent 3: Whale Tracker]
+        A1[Agent 1: Discovery] -->|New Leads| A2[Agent 2: Filter]
+        A2 -->|Safe CAs| A3[Agent 3: Whale Tracker]
         A3 -->|Smart Money| A4[Agent 4: Intel]
-        A4 -->|Narrative| A5[Agent 5: Aggregator]
+        A4 -->|Community Alpha| A5[Agent 5: Aggregator]
     end
 
-    subgraph "Command Division (Strategy)"
-        A6[Agent 6: Macro] -->|Risk Regime| A0[Agent 0: Commander]
-        A7[Agent 7: Risk] -->|Exposure Limit| A0
-        A0 -->|Approval| A5
+    subgraph "Command Division (Strategic Oversight)"
+        A6[Agent 6: Macro] <-->|Regime Analysis| A0
+        A7[Agent 7: Risk] <-->|Kill Switch / Limits| A0
+        A0 -.->|Dynamic Thresholds| A5
     end
 
-    subgraph "Execution & Review (Performance)"
+    subgraph "Execution & Review (Operations)"
         A5 -->|Final Signal| A8[Agent 8: Trader]
-        A8 -->|Execution| A9[Agent 9: Analyst]
-        A9 -->|Trade Log| Telegram((Telegram Alerts))
+        A8 -->|Trade Execution| A9[Agent 9: Performance Analyst]
+        A9 -->|Real-time Alerts & Daily Reports| User
     end
 
-    Convex[(Convex DB)] <--> A0
+    Convex[(Convex Cloud DB)] <--> A0
     Convex <--> A8
+    Convex <--> A9
 ```
+
 
 ---
 
 ## ⚡ Core Features
 
 *   **🕵️ 9-Agent Synergy**: Specialized roles from "Macro Sentinel" to "Whale Tracker" ensuring 360-degree token analysis.
-*   **🛡️ Institutional Risk Management**: Integrated Stop-Loss, Trailing Profits, and a 3-Tier Kill Switch to stop trading during severe drawdowns.
-*   **☁️ Convex Persistence**: Industry-standard database persistence for trade logs, signals, and agent states.
-*   **🤖 LLM-Driven Insights**: Powered by Claude 3.5 (Haiku 4.5 Mappings) for lightning-fast sentiment and narrative scoring.
-*   **💬 NLP Interface**: Fully interactive Telegram bot for commanding the firm using natural language.
+*   **🛡️ 3-Tier Kill Switch**: Integrated Stop-Loss, Trailing Profits, and a 3-Stage institutional-grade lockout system (Caution, Defense, Full Stop) for maximum capital protection.
+*   **☁️ Convex Persistence**: Industry-standard database persistence for signals, trades, and agent states, ensuring zero data loss.
+*   **🤖 Double-LLM Intelligence**: Powered by Claude 3.5 Sonnet for high-accuracy macro research and Haiku for lightning-fast real-time scoring.
+*   **💬 Commander Interface**: A semi-autonomous NLP interface allowing you to issue strategic orders to the "Managing Director" via Telegram.
 
 ---
 
 ## 🌍 SaaS / Business Roadmap
 This firm is designed to scale beyond a single user's account:
-- **Phase 1 (Current)**: Proprietary high-confidence trading for individual deployment.
-- **Phase 2 (Managed Services)**: Multi-wallet management and "Copy-Trading" features for high-net-worth investors.
+- **Phase 1 (Active)**: Proprietary high-confidence trading for individual deployment.
+- **Phase 2 (Managed Services)**: Multi-wallet management and "Copy-Trading" features via the Commander hub.
 - **Phase 3 (SaaS License)**: Performance-based licensing for professional trading groups.
 
 ---
@@ -80,17 +84,17 @@ This firm is designed to scale beyond a single user's account:
 | Layer | Technology |
 | :--- | :--- |
 | **Logic** | Python 3.10+ (Fully Async / Await) |
-| **Database** | [Convex](https://www.convex.dev/) (Cloud Persistence) |
-| **LLM** | Anthropic Claude 3.5 (Haiku & Sonnet) |
+| **Database** | [Convex](https://www.convex.dev/) (Unified Cloud Persistence) |
+| **LLM** | Anthropic Claude 3.5 (Sonnet & Haiku) |
 | **Discovery** | DexScreener, Solscan, Helius, Pump.fun |
-| **Frontend** | React + Custom Canvas Game Engine |
+| **Frontend** | React + Custom Custom Canvas Engine |
 
 ---
 
 ## 🚀 Unique Innovations
-1.  **The "Commander" Pattern**: A unique Agent 0 that manages all other agents, mimicking a traditional CEO-led firm.
-2.  **Haiku Dynamic Fallback**: Intelligent model switching ensuring the system never fails due to API rate limits or costs.
-3.  **Process-Cleanup Automation**: `start-app.bat` ensures a 100% stable startup by preemptively clearing network conflicts.
+1.  **The "Commander" Pattern**: A unique Agent 0 that acts as the Firm's CEO, consulting Macro and Risk agents before presenting proposals for your approval.
+2.  **Autonomous Risk Tiering**: A hardware-level risk enforcement system that resets safety margins automatically based on PnL drawdowns.
+3.  **Haiku Dynamic Fallback**: Intelligent model switching ensuring the system never fails due to API rate limits or costs.
 
 ---
 *Proprietary Trading System - Designed for Absolute Autonomy.*
