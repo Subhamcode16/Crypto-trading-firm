@@ -1,0 +1,163 @@
+{
+  "version": "1.0-master-trader",
+  "name": "Master Trading Rule Engine - 4 Traders Consensus",
+  "description": "Battle-tested rules synthesized from 4 expert memecoin traders",
+  "created": "2026-02-28",
+  "consensus_sources": [
+    "Video 1: Position sizing + market cap analysis",
+    "Video 2: Token filtering + scam detection + psychology",
+    "Video 3: Insider wallet tracking + copy-trading",
+    "Video 4: Execution + fee optimization + account scaling"
+  ],
+
+  "market_cap_rules": {
+    "enabled": true,
+    "minimum_market_cap_usd": 50000,
+    "maximum_entry_market_cap_usd": 500000,
+    "position_size_tiers": {
+      "20000-50000": 0.5,
+      "50000-100000": 0.75,
+      "100000-200000": 1.0,
+      "200000-500000": 1.25,
+      "500000+": 1.0
+    },
+    "description": "Position size multiplier based on market cap risk tier"
+  },
+
+  "holder_rules": {
+    "enabled": true,
+    "max_single_holder_percentage": 0.04,
+    "red_flag_holder_percentage": 0.10,
+    "max_bundle_percentage": 0.30,
+    "gini_coefficient_max": 0.85,
+    "top_10_concentration_max": 0.40,
+    "description": "Holder distribution must be clean; detect concentration risk"
+  },
+
+  "community_rules": {
+    "enabled": true,
+    "require_community": true,
+    "require_active_community": true,
+    "posting_frequency_min_minutes": 5,
+    "platforms": ["twitter", "telegram", "discord"],
+    "description": "Community must exist AND be actively engaged"
+  },
+
+  "narrative_rules": {
+    "enabled": true,
+    "apply_narrative_bonus": true,
+    "strong_narratives": {
+      "trump": 0.5,
+      "elon": 0.5,
+      "white_house": 0.5,
+      "matt_fury": 0.25,
+      "billionaire": 0.25,
+      "doge": 0.25,
+      "pepe": 0.25,
+      "musk": 0.25
+    },
+    "max_narrative_boost": 0.5,
+    "description": "Boost confidence if token has strong meme/narrative appeal"
+  },
+
+  "scam_detection_rules": {
+    "enabled": true,
+    "global_fees_to_market_cap_ratio_min": 0.5,
+    "description": "Low fees paid relative to market cap = likely scam (bundlers/bots)"
+  },
+
+  "entry_rules": {
+    "enabled": true,
+    "entry_signal_types": [
+      "new_deploy",
+      "post_migration_dump",
+      "insider_buy",
+      "insider_plus_acid"
+    ],
+    "require_confirmation": true,
+    "minimum_volume_usd": 10000,
+    "require_floor_formation": true,
+    "require_holders_confidence": true,
+    "description": "Don't FOMO - wait for confirmation signals before entering"
+  },
+
+  "exit_rules": {
+    "enabled": true,
+    "profit_target_min_pct": 0.50,
+    "profit_target_max_pct": 1.00,
+    "flexible_profit_taking": true,
+    "take_profit_on_hesitation": true,
+    "stop_loss_soft_pct": -0.10,
+    "stop_loss_hard_pct": -0.20,
+    "dynamic_profit_protection": true,
+    "description": "Take profits flexibly (50-100%); cut losses fast (-20% max)"
+  },
+
+  "risk_management": {
+    "enabled": true,
+    "daily_loss_limit_usd": 3.0,
+    "soft_pause_loss_usd": 3.0,
+    "hard_stop_loss_usd": 5.0,
+    "max_single_position_percentage": 0.05,
+    "max_simultaneous_positions": 5,
+    "max_total_portfolio_exposure_percentage": 0.30,
+    "description": "Conservative risk limits; position sizing by account balance"
+  },
+
+  "fee_optimization": {
+    "enabled": true,
+    "preferred_platform": "banana_pro",
+    "max_acceptable_fees_usd": 1.0,
+    "calculate_breakeven": true,
+    "minimum_profitable_position_usd": 20,
+    "description": "Fees matter hugely for small accounts; optimize platform choice"
+  },
+
+  "psychology_rules": {
+    "enabled": true,
+    "rules": [
+      "cut_losses_fast",
+      "let_winners_run",
+      "dont_fomo",
+      "use_stops_not_watches",
+      "take_profit_on_hesitation",
+      "dont_chase_micro_caps"
+    ],
+    "description": "Psychology is THE most important factor - discipline is everything"
+  },
+
+  "account_scaling": {
+    "enabled": true,
+    "start_position_size_sol": 0.1,
+    "scale_increase_at_milestone_sol": 1.0,
+    "max_position_size_sol": 1.0,
+    "scale_based_on_profitability": true,
+    "tiers": {
+      "0-1": 0.1,
+      "1-2": 0.15,
+      "2-5": 0.2,
+      "5-10": 0.3,
+      "10-20": 0.5,
+      "20+": 1.0
+    },
+    "description": "Scale position size gradually as account grows; prove strategy at each tier"
+  },
+
+  "migration_dump_rules": {
+    "enabled": true,
+    "expect_dump_percentage": 0.30,
+    "floor_formation_required": true,
+    "rebound_target_percentage": 0.50,
+    "description": "90% of tokens dump 30-50% post-migration; exploit the rebound"
+  },
+
+  "insider_tracking": {
+    "enabled": true,
+    "track_sniper_wallets": true,
+    "track_diamond_hands": true,
+    "track_pump_wallets": true,
+    "min_win_rate_for_follow": 0.85,
+    "aggressive_stop_loss_for_insider_trades": true,
+    "description": "Follow smart money (insiders) but with aggressive stops to prevent rug"
+  }
+}

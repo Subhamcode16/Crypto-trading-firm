@@ -1,0 +1,185 @@
+{
+  "timestamp": "2026-03-06T18:39:46.511897",
+  "tokens": [
+    {
+      "token_name": "Token A (Good)",
+      "token_address": "TokenA123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 6.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 5.5,
+        "discord_found": false,
+        "telegram_found": false,
+        "twitter_sentiment": "neutral",
+        "narrative_strength": 6.0,
+        "confidence": "low",
+        "note": "Discord bot token not provided - using mock data"
+      },
+      "agent_5": {
+        "status": "GATE_BLOCKED",
+        "composite_score": 7.174999999999999,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Score 7.2 < 8.0"
+      },
+      "master_rules": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed",
+        "score": 0
+      },
+      "risk_manager": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed"
+      },
+      "final_status": "SKIP",
+      "final_score": 7.174999999999999,
+      "latencies": {
+        "agent_1": 2.47955322265625e-05,
+        "agent_2": 3.075599670410156e-05,
+        "agent_3": 2.09808349609375e-05,
+        "agent_4": 2.002716064453125e-05,
+        "agent_5": 2.6941299438476562e-05
+      },
+      "total_latency": 0.0023305416107177734
+    },
+    {
+      "token_name": "Token B (Whale)",
+      "token_address": "TokenB123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "KILLED",
+        "safety_score": 0.0,
+        "filters_passed": 0,
+        "total_filters": 9,
+        "failed_filter": "liquidity_locked",
+        "confidence": "none"
+      },
+      "agent_3": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_4": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_5": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 2 failed",
+        "composite_score": 0
+      },
+      "master_rules": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed",
+        "score": 0
+      },
+      "risk_manager": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed"
+      },
+      "final_status": "SKIP",
+      "final_score": 0.0,
+      "latencies": {
+        "agent_1": 1.9311904907226562e-05,
+        "agent_2": 2.1219253540039062e-05
+      },
+      "total_latency": 0.0013353824615478516
+    },
+    {
+      "token_name": "Token C (Scam)",
+      "token_address": "TokenC123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 6.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 5.5,
+        "discord_found": false,
+        "telegram_found": false,
+        "twitter_sentiment": "neutral",
+        "narrative_strength": 6.0,
+        "confidence": "low",
+        "note": "Discord bot token not provided - using mock data"
+      },
+      "agent_5": {
+        "status": "GATE_BLOCKED",
+        "composite_score": 7.174999999999999,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Score 7.2 < 8.0"
+      },
+      "master_rules": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed",
+        "score": 0
+      },
+      "risk_manager": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed"
+      },
+      "final_status": "SKIP",
+      "final_score": 7.174999999999999,
+      "latencies": {
+        "agent_1": 1.9788742065429688e-05,
+        "agent_2": 0.0003752708435058594,
+        "agent_3": 7.43865966796875e-05,
+        "agent_4": 3.337860107421875e-05,
+        "agent_5": 2.0265579223632812e-05
+      },
+      "total_latency": 0.001140594482421875
+    }
+  ],
+  "statistics": {
+    "total_tokens": 3,
+    "passed_agent_2": 2,
+    "passed_agent_5": 0,
+    "passed_master_rules": 0,
+    "passed_risk_manager": 0,
+    "final_approved": 0,
+    "avg_latency": 0.0,
+    "max_latency": 0.0,
+    "min_latency": 99999.0
+  }
+}

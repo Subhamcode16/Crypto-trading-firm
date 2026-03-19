@@ -1,0 +1,12 @@
+{
+  "name": "crypto-trading-bot",
+  "version": "1.0.0",
+  "description": "Crypto Trading Bot with Convex Backend",
+  "main": "index.js",
+  "scripts": {
+    "dev": "convex dev"
+  },
+  "dependencies": {
+    "convex": "^1.19.0"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "system": {
+    "name": "Solana Memecoin Trading Bot",
+    "version": "1.0.0",
+    "environment": "staging"
+  },
+  "trading": {
+    "starting_capital": 10.0,
+    "daily_loss_limit": 3.0,
+    "portfolio_max_exposure": 0.30,
+    "position_size": {
+      "confidence_8_10": 2.0,
+      "confidence_6_7": 1.0,
+      "confidence_min": 6
+    }
+  },
+  "risk": {
+    "stop_loss_percent": 20,
+    "take_profit_tier1": 2.0,
+    "take_profit_tier1_sell": 0.40,
+    "take_profit_tier2": 4.0,
+    "take_profit_tier2_sell": 0.40,
+    "trailing_stop_percent": 50
+  },
+  "telegram": {
+    "enabled": true,
+    "message_format": "json"
+  },
+  "discord": {
+    "enabled": true,
+    "bot_token": "",
+    "intents": ["message_content", "guilds", "guild_messages"]
+  },
+  "scheduler": {
+    "researcher_interval_minutes": 15,
+    "position_monitor_interval_seconds": 60
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}

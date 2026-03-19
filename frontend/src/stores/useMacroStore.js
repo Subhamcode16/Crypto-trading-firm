@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export const useMacroStore = create((set) => ({
     status: 'CLEAR',
+    market_regime: 'MIXED',
     btc_1h_change: "0.0",
     sol_1h_change: "0.0",
     fear_greed_index: "50",

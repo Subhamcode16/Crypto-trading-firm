@@ -1,0 +1,369 @@
+{
+  "timestamp": "2026-03-06T19:33:11.656428",
+  "tokens": [
+    {
+      "token_name": "Token A (Good)",
+      "token_address": "TokenA123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 7.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 8.6,
+        "discord_found": false,
+        "discord_stats": {
+          "server_found": false,
+          "member_count": 0,
+          "online_count": 0,
+          "activity_level": "unknown",
+          "messages_1h": 0,
+          "sentiment": {
+            "positive": 0.0,
+            "neutral": 0.5,
+            "negative": 0.0
+          },
+          "growth_pattern": "unknown",
+          "health_score": 0.0,
+          "red_flags": [
+            "No Discord server found for this token"
+          ],
+          "green_flags": []
+        },
+        "telegram_found": false,
+        "narrative_strength": 0.4,
+        "confidence": 0.55,
+        "full_analysis": {
+          "agent_id": 4,
+          "token_address": "TokenA123456789012345678901234567890",
+          "token_symbol": "TOKENA",
+          "analysis_timestamp": "2026-03-06T19:33:11.654733",
+          "status": "CLEARED",
+          "score": 8.6,
+          "confidence": 0.55,
+          "execution_time_ms": 0.118,
+          "community": {
+            "discord": {
+              "server_found": false,
+              "member_count": 0,
+              "online_count": 0,
+              "activity_level": "unknown",
+              "messages_1h": 0,
+              "sentiment": {
+                "positive": 0.0,
+                "neutral": 0.5,
+                "negative": 0.0
+              },
+              "growth_pattern": "unknown",
+              "health_score": 0.0,
+              "red_flags": [
+                "No Discord server found for this token"
+              ],
+              "green_flags": []
+            },
+            "telegram": {
+              "group_found": false,
+              "member_count": 0,
+              "activity_level": "unknown",
+              "growth_rate_1h": 0,
+              "sentiment": {
+                "positive": 0.0,
+                "neutral": 0.5,
+                "negative": 0.0
+              },
+              "red_flags": [],
+              "green_flags": []
+            }
+          },
+          "narrative": {
+            "clarity": 0.4,
+            "uniqueness": 0.0,
+            "community_alignment": 0.0,
+            "description": "Token A (Good) - Market Cap: $500000",
+            "red_flags": [
+              "Unclear or generic description"
+            ],
+            "green_flags": []
+          },
+          "coordination": {
+            "growth_pattern": "organic",
+            "distribution": 0.7,
+            "whale_concentration": 0.15,
+            "red_flags": [],
+            "green_flags": [
+              "Organic growth pattern assumed"
+            ]
+          },
+          "failure_reason": null,
+          "summary": {
+            "discord_points": 7.5,
+            "telegram_points": 0.0,
+            "narrative_points": 0.3,
+            "coordination_points": 0.8,
+            "total_points": 8.6
+          }
+        }
+      },
+      "agent_5": {
+        "status": "GATE_PASSED",
+        "composite_score": 8.195,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Confluence of signals"
+      },
+      "master_rules": {
+        "status": "GATE_PASSED",
+        "score": 7.8,
+        "reason": "Tier 1 critical rules passed",
+        "position_multiplier": 1.1
+      },
+      "risk_manager": {
+        "status": "APPROVED",
+        "equity_risk_pct": 1.8,
+        "position_pct": 15.0,
+        "reward_ratio": 5.0,
+        "checks_passed": 5
+      },
+      "final_status": "EXECUTE",
+      "final_score": 8.195,
+      "latencies": {
+        "agent_1": 3.0994415283203125e-05,
+        "agent_2": 3.337860107421875e-05,
+        "agent_3": 2.6941299438476562e-05,
+        "agent_4": 0.0002448558807373047,
+        "agent_5": 2.8133392333984375e-05,
+        "master_rules": 7.319450378417969e-05,
+        "risk_manager": 2.7894973754882812e-05
+      },
+      "total_latency": 0.002195596694946289
+    },
+    {
+      "token_name": "Token B (Whale)",
+      "token_address": "TokenB123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "KILLED",
+        "safety_score": 0.0,
+        "filters_passed": 0,
+        "total_filters": 9,
+        "failed_filter": "liquidity_locked",
+        "confidence": "none"
+      },
+      "agent_3": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_4": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_5": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 2 failed",
+        "composite_score": 0
+      },
+      "master_rules": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed",
+        "score": 0
+      },
+      "risk_manager": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed"
+      },
+      "final_status": "SKIP",
+      "final_score": 0.0,
+      "latencies": {
+        "agent_1": 2.765655517578125e-05,
+        "agent_2": 2.6941299438476562e-05
+      },
+      "total_latency": 0.0013885498046875
+    },
+    {
+      "token_name": "Token C (Scam)",
+      "token_address": "TokenC123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 7.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 8.6,
+        "discord_found": false,
+        "discord_stats": {
+          "server_found": false,
+          "member_count": 0,
+          "online_count": 0,
+          "activity_level": "unknown",
+          "messages_1h": 0,
+          "sentiment": {
+            "positive": 0.0,
+            "neutral": 0.5,
+            "negative": 0.0
+          },
+          "growth_pattern": "unknown",
+          "health_score": 0.0,
+          "red_flags": [
+            "No Discord server found for this token"
+          ],
+          "green_flags": []
+        },
+        "telegram_found": false,
+        "narrative_strength": 0.4,
+        "confidence": 0.55,
+        "full_analysis": {
+          "agent_id": 4,
+          "token_address": "TokenC123456789012345678901234567890",
+          "token_symbol": "TOKENC",
+          "analysis_timestamp": "2026-03-06T19:33:11.655703",
+          "status": "CLEARED",
+          "score": 8.6,
+          "confidence": 0.55,
+          "execution_time_ms": 0.1,
+          "community": {
+            "discord": {
+              "server_found": false,
+              "member_count": 0,
+              "online_count": 0,
+              "activity_level": "unknown",
+              "messages_1h": 0,
+              "sentiment": {
+                "positive": 0.0,
+                "neutral": 0.5,
+                "negative": 0.0
+              },
+              "growth_pattern": "unknown",
+              "health_score": 0.0,
+              "red_flags": [
+                "No Discord server found for this token"
+              ],
+              "green_flags": []
+            },
+            "telegram": {
+              "group_found": false,
+              "member_count": 0,
+              "activity_level": "unknown",
+              "growth_rate_1h": 0,
+              "sentiment": {
+                "positive": 0.0,
+                "neutral": 0.5,
+                "negative": 0.0
+              },
+              "red_flags": [],
+              "green_flags": []
+            }
+          },
+          "narrative": {
+            "clarity": 0.4,
+            "uniqueness": 0.0,
+            "community_alignment": 0.0,
+            "description": "Token C (Scam) - Market Cap: $100000",
+            "red_flags": [
+              "Unclear or generic description"
+            ],
+            "green_flags": []
+          },
+          "coordination": {
+            "growth_pattern": "organic",
+            "distribution": 0.7,
+            "whale_concentration": 0.15,
+            "red_flags": [],
+            "green_flags": [
+              "Organic growth pattern assumed"
+            ]
+          },
+          "failure_reason": null,
+          "summary": {
+            "discord_points": 7.5,
+            "telegram_points": 0.0,
+            "narrative_points": 0.3,
+            "coordination_points": 0.8,
+            "total_points": 8.6
+          }
+        }
+      },
+      "agent_5": {
+        "status": "GATE_PASSED",
+        "composite_score": 8.195,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Confluence of signals"
+      },
+      "master_rules": {
+        "status": "GATE_PASSED",
+        "score": 7.8,
+        "reason": "Tier 1 critical rules passed",
+        "position_multiplier": 1.1
+      },
+      "risk_manager": {
+        "status": "APPROVED",
+        "equity_risk_pct": 1.8,
+        "position_pct": 15.0,
+        "reward_ratio": 5.0,
+        "checks_passed": 5
+      },
+      "final_status": "EXECUTE",
+      "final_score": 8.195,
+      "latencies": {
+        "agent_1": 2.8371810913085938e-05,
+        "agent_2": 2.7418136596679688e-05,
+        "agent_3": 2.6464462280273438e-05,
+        "agent_4": 0.00021600723266601562,
+        "agent_5": 2.8848648071289062e-05,
+        "master_rules": 6.365776062011719e-05,
+        "risk_manager": 2.5510787963867188e-05
+      },
+      "total_latency": 0.0011315345764160156
+    }
+  ],
+  "statistics": {
+    "total_tokens": 3,
+    "passed_agent_2": 2,
+    "passed_agent_5": 2,
+    "passed_master_rules": 2,
+    "passed_risk_manager": 2,
+    "final_approved": 2,
+    "avg_latency": 0.0,
+    "max_latency": 0.0,
+    "min_latency": 99999.0
+  }
+}

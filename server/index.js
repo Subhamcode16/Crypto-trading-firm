@@ -55,6 +55,17 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            
+            // Bridge: If the message looks like an agent event (from Python backend or scenario),
+            // broadcast it to all other connected clients (like the Frontend)
+            if (data.event) {
+                wss.clients.forEach((client) => {
+                    if (client !== ws && client.readyState === WebServer.OPEN) {
+                        client.send(JSON.stringify(data));
+                    }
+                });
+            }
+
             if (data.type === 'RUN_SCENARIO') {
                 runScenario(wss, data.name);
             }

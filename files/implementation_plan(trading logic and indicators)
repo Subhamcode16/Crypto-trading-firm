@@ -1,0 +1,46 @@
+# Signal Filtering Loosening and Strategy Enhancement
+
+This plan aims to address the issue of excessive signal dropping (100+ signals/6 hours) by loosening the entry criteria in the Intelligence Division (Agent 5) and balancing it with more sophisticated risk management and **Quant Indicator Overlays** in the Command Division.
+
+## User Selections & Quant Additions
+
+1. **Threshold Level**: **6.0 (Low)** - Aligns with Agent 7's lowest tier.
+2. **Single-Source Signals**: **Conditional (Score > 9.0)** - Allow high-confidence single-source signals.
+3. **Risk Management**: **Size & SL Protection** - 2% size and 10% SL for Venture (6.0-8.0) tier.
+4. **Strategy Enhancement**: **Dynamic Trailing Stops** - Prioritize profit protection.
+5. **Quant Overlays (from je-suis-tm/quant-trading)**:
+   - **Bollinger Bands**: Detect "Squeeze" vs "Expansion" to avoid buying at peaks.
+   - **RSI Patterns**: Identify divergence and overbought macro conditions.
+   - **Dual Thrust / Volume Analysis**: Confirm that breakouts are backed by real interest.
+
+## Proposed Changes
+
+### [Intelligence Division]
+
+#### [MODIFY] [agent_5_signal_aggregator.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_5_signal_aggregator.py)
+- Update `min_pass_score` to **6.0**.
+- Modify confluence logic to allow single-source signals IF score > 9.0.
+- **[NEW]** Add a `quant_overlay_score` using Bollinger Bands and RSI to adjust the final composite score.
+
+#### [MODIFY] [agent_6_macro_sentinel.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_6_macro_sentinel.py)
+- Integrate Bollinger Bands logic to detect macro overextension.
+- Update [check_downtrend](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_6_macro_sentinel.py#142-170) to include RSI divergence checks.
+
+### [Command Division]
+
+#### [MODIFY] [agent_7_risk_manager.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_7_risk_manager.py)
+- Implement **VentureTier** (2% size, 10% SL).
+- Add `dynamic_sl_thresholds` to the [TradeInstruction](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_8_trading_bot.py#19-33).
+
+#### [MODIFY] [agent_8_trading_bot.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_8_trading_bot.py)
+- Implement **Dynamic Trailing Stop** logic in [_evaluate_position_exits](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_8_trading_bot.py#444-578).
+- Logic: +20% profit -> move SL to Breakeven (+1%). +50% profit -> move SL to +30%.
+
+## Verification Plan
+
+### Automated Tests
+- `pytest tests/test_agent_5_quant.py`: Verify that quant overlays correctly penalize "toppy" signals.
+- `pytest tests/test_agent_8_trailing.py`: Simulate price action and verify SL moves correctly.
+
+### Manual Verification
+- Verify the "Venture" alerts in Telegram show the new quant reasons (e.g., "RSI divergence detected, reducing size").

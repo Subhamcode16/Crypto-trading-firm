@@ -1,0 +1,150 @@
+# Agent 0 (Commander) Expansion Plan
+
+Agent 0 is the Managing Director. Today it runs a 4-hourly strategy review and blindly applies its own orders. This plan upgrades it to a **semi-autonomous commanding intelligence** that communicates with you via Telegram, processes your natural language orders, consults other agents before acting, and only requires your approval for offensive decisions (increasing risk).
+
+---
+
+## Proposed Architecture
+
+```
+YOU (Telegram) ─► AGENT 0 (NLP Parser) ─► DB (system_state / pending_approvals)
+                         │                           ▲
+                         ├── consults Agent 7 (Risk) ─┘
+                         ├── consults Agent 6 (Macro)
+                         └── sends back briefing with reasoning ► YOU (Telegram)
+```
+
+---
+
+## Changes Required
+
+### Component 1: Database ([database.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/database.py))
+#### [MODIFY] [database.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/database.py)
+Add a new `pending_approvals` table to store proposals Agent 0 sends you that require your '/approve' or '/reject' response.
+
+```sql
+CREATE TABLE IF NOT EXISTS pending_approvals (
+    id             INTEGER PRIMARY KEY,
+    proposal_id    TEXT UNIQUE,
+    user_id        TEXT,
+    action_json    TEXT,      -- Full order JSON to apply if approved
+    reasoning      TEXT,      -- Agent 0's briefing
+    agent_votes    TEXT,      -- JSON: { "agent_6": "...", "agent_7": "..." }
+    status         TEXT,      -- 'pending', 'approved', 'rejected', 'expired'
+    created_at     TEXT,
+    resolved_at    TEXT
+)
+```
+
+New helper methods:
+- `create_pending_approval(user_id, proposal_id, action_json, reasoning, agent_votes)` 
+- `get_pending_approval(proposal_id)` 
+- `resolve_pending_approval(proposal_id, status)` → 'approved'|'rejected'
+
+---
+
+### Component 2: Agent 0 Commander ([agent_0_commander.py](file:///C:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_0_commander.py))
+#### [MODIFY] [agent_0_commander.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_0_commander.py)
+
+**New Methods:**
+
+| Method | Description |
+|---|---|
+| `process_telegram_command(text, user_id)` | Entry point. LLM translates freeform text → structured intent |
+| `_parse_intent_with_llm(text)` | Claude Haiku translates "dial back risk" → `{action: "REDUCE_RISK", params: {}}` |
+| `_assess_proposal_with_agents(intent)` | Gathers Agent 6 macro view + Agent 7 current state to build a briefing |
+| `_send_approval_request(briefing, action, user_id)` | Sends Telegram message + stores to `pending_approvals` |
+| `_auto_apply_defensive(action, user_id)` | Directly applies reducing risk/pausing without approval |
+| `resolve_approval(proposal_id, approved)` | Called from TelegramBot polling when user replies `/approve` or `/reject` |
+
+**Semi-Autonomous Logic:**
+
+```
+Defensive moves (LOWER risk, PAUSE trading) → auto-apply, notify you after
+Offensive moves (RAISE risk/limits)         → require your /approve or /reject
+```
+
+**Strategic Review** enhancement:
+- After Sonnet produces its order, it now also provides `agent_votes` (what Agent 6 macro regime says, what Agent 7 risk state says)
+- These are included in every Telegram message so you always know *why* Agent 0 is proposing something.
+
+---
+
+### Component 3: Telegram Bot ([telegram_bot.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/telegram_bot.py))
+#### [MODIFY] [telegram_bot.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/telegram_bot.py)
+
+**New polling capabilities in [poll_commands()](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/telegram_bot.py#155-190):**
+- Any plain text message from you → `agent_0.process_telegram_command(text, user_id)`
+- `/approve <proposal_id>` → resolve pending proposal and apply it
+- `/reject <proposal_id>` → marks it as rejected, notifies you
+- `/status` → Agent 0 quickly summarizes: system state, kill switch tier, open positions count, today's PnL
+
+**New send methods:**
+- `send_approval_request(briefing_dict)` → richly formatted proposal card with proposal ID, reasoning, and agent votes 
+- `send_commander_action(action, reasoning)` → notification when Agent 0 auto-applies a defensive change
+
+---
+
+### Component 4: Main App ([main.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/main.py))
+#### [MODIFY] [main.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/main.py)
+
+- Inject `self.commander` into `self.telegram` so [poll_commands()](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/telegram_bot.py#155-190) can call `agent_0.process_telegram_command()`
+- Wire up a **60-second Telegram polling job** (separate from the 4h strategic review) using `scheduler.add_custom_job()`
+
+---
+
+## What Will NOT Change
+- [agent_1](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/backtest_5_agent_pipeline.py#165-191) through `agent_9` internal logic is untouched.
+- [scheduler.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/scheduler.py) will reuse the existing [add_custom_job](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/scheduler.py#77-94) method we already added.
+- No frontend changes.
+- No changes to [server.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/server.py) (FastAPI).
+
+---
+
+## Telegram UX Examples
+
+**You say:** `"Hey, market looks choppy today, be careful"`
+
+**Agent 0 replies:**
+```
+🎖️ COMMANDER BRIEFING — Strategic Review Initiated
+
+📊 Agent 6 (Macro): Market regime = CHOPPY. BTC down 4%, Fear index high.
+⚖️ Agent 7 (Risk): 2/5 trades today resulted in losses. Daily loss at 40% of limit.
+
+🧠 My Reading:
+I recommend reducing position sizes to 5% (from 10%) and raising the Agent 5 
+threshold from 8.0 → 8.5 to filter out marginal signals.
+
+[This is a DEFENSIVE action — applying automatically in 5 minutes]
+```
+
+**You say:** `"I want to go aggressive, raise the position sizes"`
+
+**Agent 0 replies:**
+```
+🎖️ COMMANDER PROPOSAL — Needs Your Approval
+
+📊 Agent 6 (Macro): Market regime = BULLISH. SOL up 8% week.
+⚖️ Agent 7 (Risk): No daily losses yet. Kill Switch at Tier 0 (clear).
+
+🧠 My Reading:
+Raising position size from 10% → 15% of capital. This would increase max 
+position exposure from $1.50 to $2.25 on current $15 capital.
+
+⚠️ Risk: This amplifies both gains AND losses. In a 5-trade losing session, 
+daily loss limit would be hit faster.
+
+Reply /approve abc123 to confirm, or /reject abc123 to cancel.
+━━━━━━━━
+Proposal ID: abc123 | Expires: 30 minutes
+```
+
+---
+
+## Verification Plan
+- Unit test `process_telegram_command()` with 5 sample messages (pause, risky, defensive, status)
+- Confirm DB `pending_approvals` table is created on startup
+- Confirm defensive actions auto-apply without needing approval
+- Confirm offensive proposals land in DB as `pending` and are resolved correctly on `/approve`
+- Ensure bot loop runs stable (no blocking the APScheduler thread)

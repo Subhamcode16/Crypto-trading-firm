@@ -1,4 +1,5 @@
 import { officeState, CharacterState, GRID_SIZE } from './officeState';
+import { useAgentStore } from '../stores/useAgentStore';
 
 // Disable grid rendering after calibration
 window.__DEBUG_GRID = false;
@@ -62,8 +63,8 @@ export class Renderer {
             const sprH = sprite.height * scale;
 
             // Walking bob: small vertical oscillation when moving
-            const isWalking = ch.state === CharacterState.WALK;
-            const bob = isWalking ? Math.sin(now * 12) * 1.5 : 0;
+            const isMoving = ch.path.length > 0;
+            const bob = isMoving ? Math.sin(now * 12) * 1.5 : 0;
 
             // World draw position — center horizontally, anchor bottom to ch.y
             const drawX = ch.x - sprW / 2;
@@ -193,15 +194,55 @@ export class Renderer {
         drawables.sort((a, b) => a.zY - b.zY);
         for (const d of drawables) d.draw(ctx);
 
-        // ── Phase 2: Speech Bubbles (always on top of everything) ─────────────
+        // ── Phase 2: Speech Bubbles & HUD Labels (always on top of everything) ─────────────
+        const agentData = useAgentStore.getState().agents;
         for (const [id, ch] of officeState.characters.entries()) {
+            const agent = agentData[id];
+            const sprite = this.sprites[id];
+            const sprH = sprite ? sprite.height * 2.0 : 48;
+
+            // 1. Draw Active Token HUD ([BTC], [SOL], etc.)
+            if (agent?.activeToken && !ch.matrixEffect) {
+                this.renderHUDLabel(ctx, ch, sprH, agent.activeToken, now);
+            }
+
+            // 2. Draw Speech Bubble
             if (ch.bubble && !ch.matrixEffect) {
-                const sprite = this.sprites[id];
-                const sprH = sprite ? sprite.height * 2.0 : 48;
                 this.renderBubble(ctx, ch, sprH, now);
             }
         }
 
+        ctx.restore();
+    }
+
+    /**
+     * Renders a small text pill above the agent representing the current token being processed.
+     */
+    renderHUDLabel(ctx, ch, sprH, token, now) {
+        const x = ch.x;
+        // Float slightly with the same bobbing as the character if they were walking, 
+        // but here we just anchor it to their head.
+        const y = ch.y - sprH - 6;
+
+        ctx.save();
+        ctx.font = 'bold 7px monospace';
+        const tw = ctx.measureText(token).width;
+        const bw = tw + 6;
+        const bh = 10;
+
+        // Background pill
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.5)'; // Cyan border
+        ctx.lineWidth = 1;
+
+        // Draw rounded-ish rect (pixel style)
+        ctx.fillRect(x - bw / 2, y - bh, bw, bh);
+        ctx.strokeRect(x - bw / 2, y - bh, bw, bh);
+
+        // Text
+        ctx.fillStyle = '#22D3EE';
+        ctx.textAlign = 'center';
+        ctx.fillText(token, x, y - 2.5);
         ctx.restore();
     }
 

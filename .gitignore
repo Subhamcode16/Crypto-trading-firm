@@ -1,5 +1,8 @@
 .env
+.env.local
+backend/DISCORD_TOKEN_CONFIGURED.md
 *.log
+planner_debug.log
 __pycache__/
 node_modules/
 dist/
@@ -9,4 +12,9 @@ build/
 .DS_Store
 *.pyc
 .pytest_cache/
-planner_debug.log
+venv/
+.venv/
+src/ml/data/*.json
+backtest_output.log
+test_output.log
+backend/live_discovery_test.log

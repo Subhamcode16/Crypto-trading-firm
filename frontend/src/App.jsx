@@ -3,11 +3,12 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Header } from './components/layout/Header';
 import { GameContainer } from './components/canvas/GameContainer';
 import { AgentPanel } from './components/panels/AgentPanel';
-import { ScenarioMenu } from './components/panels/ScenarioMenu';
+import { GameController } from './components/panels/GameController';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAgentStore } from './stores/useAgentStore';
 import { StatsDashboard } from './pages/StatsDashboard';
 import { routeEvent } from './logic/EventAdapter';
+import { InboxDrawer } from './components/panels/InboxDrawer';
 
 // Extracted from original App.jsx
 function OfficeView() {
@@ -16,11 +17,6 @@ function OfficeView() {
   const agents = useAgentStore((state) => state.agents);
   const selectedAgent = selectedId ? agents[selectedId] : null;
 
-  const handleTriggerScenario = (name) => {
-    send({ type: 'RUN_SCENARIO', name });
-    // Also directly trigger FSM + bubbles locally for instant offline feedback
-    routeEvent({ event: name, agent_id: null, payload: {} });
-  };
 
   return (
     <main className="relative w-full h-full pt-[72px] flex flex-col">
@@ -52,7 +48,7 @@ function OfficeView() {
           ))}
         </div>
       </div>
-      <ScenarioMenu onTrigger={handleTriggerScenario} />
+      <GameController />
       {selectedAgent && (
         <AgentPanel
           agent={selectedAgent}
@@ -67,6 +63,7 @@ function App() {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#8b9bb4] text-black selection:bg-black/10">
       <Header />
+      <InboxDrawer />
       <Routes>
         <Route path="/" element={<OfficeView />} />
         <Route path="/dashboard" element={<StatsDashboard />} />

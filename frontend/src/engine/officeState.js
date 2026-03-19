@@ -66,15 +66,15 @@ const WANDER_LIMIT_MAX = 4;
 // 8 = TradingBot         (4, 8)
 // 9 = PerformanceAnalyst (36.5, 7)
 const DESK_SEATS = [
-    { id: 1, gx: 26, gy: 3, label: 'Researcher' },
-    { id: 2, gx: 2, gy: 11, label: 'OnChainAnalyst' },
-    { id: 3, gx: 6, gy: 11, label: 'WalletTracker' },
-    { id: 4, gx: 16, gy: 11, label: 'IntelAgent' },
-    { id: 5, gx: 19, gy: 7, label: 'SignalAggregator' },
-    { id: 6, gx: 4, gy: 3, label: 'MacroSentinel' },
-    { id: 7, gx: 22, gy: 11, label: 'RiskManager' },
-    { id: 8, gx: 4, gy: 8, label: 'TradingBot' },
-    { id: 9, gx: 36.5, gy: 7, label: 'PerformanceAnalyst' },
+    { id: 1, gx: 26, gy: 3, label: 'Researcher', bounds: { minC: 24, maxC: 28, minR: 2, maxR: 4 } },
+    { id: 2, gx: 2, gy: 11, label: 'OnChainAnalyst', bounds: { minC: 1, maxC: 4, minR: 10, maxR: 12 } },
+    { id: 3, gx: 6, gy: 11, label: 'WalletTracker', bounds: { minC: 5, maxC: 8, minR: 10, maxR: 12 } },
+    { id: 4, gx: 16, gy: 11, label: 'IntelAgent', bounds: { minC: 14, maxC: 18, minR: 10, maxR: 12 } },
+    { id: 5, gx: 19, gy: 7, label: 'SignalAggregator', bounds: { minC: 17, maxC: 21, minR: 6, maxR: 8 } },
+    { id: 6, gx: 4, gy: 3, label: 'MacroSentinel', bounds: { minC: 2, maxC: 8, minR: 2, maxR: 4 } },
+    { id: 7, gx: 22, gy: 11, label: 'RiskManager', bounds: { minC: 20, maxC: 24, minR: 10, maxR: 12 } },
+    { id: 8, gx: 4, gy: 8, label: 'TradingBot', bounds: { minC: 2, maxC: 6, minR: 7, maxR: 9 } },
+    { id: 9, gx: 36.5, gy: 7, label: 'PerformanceAnalyst', bounds: { minC: 34, maxC: 39, minR: 5, maxR: 9 } },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ export class OfficeState {
 
         // Register all desks
         for (const desk of DESK_SEATS) {
-            this.registerSeat(desk.id, desk.gx, desk.gy, desk.label);
+            this.registerSeat(desk.id, desk.gx, desk.gy, desk.label, desk.bounds);
         }
 
         // Pre-compute walkable tiles (exclude desk cells)
@@ -119,7 +119,7 @@ export class OfficeState {
 
     // ── Setup ────────────────────────────────────────────────────────────────
 
-    registerSeat(id, gx, gy, label = '') {
+    registerSeat(id, gx, gy, label = '', bounds = null) {
         const col = Math.round(gx); // snap to nearest int for grid
         const row = Math.round(gy);
         // World pixel center of the desk cell
@@ -129,7 +129,7 @@ export class OfficeState {
         const mx = x;
         const my = y - 20;
 
-        this.seats.set(id, { id, gx, gy, col, row, x, y, mx, my, label, assigned: false });
+        this.seats.set(id, { id, gx, gy, col, row, x, y, mx, my, label, bounds, assigned: false });
 
         // Mark the desk tile as blocked for pathfinding
         this.blockedTiles.add(`${col},${row}`);
@@ -259,6 +259,8 @@ export class OfficeState {
 
     // ── Update Loop ──────────────────────────────────────────────────────────
 
+    // ── Update Loop ──────────────────────────────────────────────────────────
+
     update(dt) {
         for (const [, ch] of this.characters) {
 
@@ -270,6 +272,7 @@ export class OfficeState {
                 ch.bubble.timer -= dt;
                 if (ch.bubble.timer <= 0) ch.bubble = null;
             }
+
             if (ch.matrixEffect === 'spawn') {
                 ch.matrixEffectTimer += dt;
                 if (ch.matrixEffectTimer >= 0.3) {
@@ -279,19 +282,25 @@ export class OfficeState {
                 continue; // Skip FSM while spawning
             }
 
-            // ── FSM ──────────────────────────────────────────────────────────
+            // ── Movement Advance (Independent of State) ──────────────────────
+            // Advance path if it exists, regardless of current FSM state
+            if (ch.path.length > 0) {
+                this._stepMovement(ch, dt);
+            }
+
+            // ── FSM Logic ────────────────────────────────────────────────────
             switch (ch.state) {
 
                 case CharacterState.WORKING:
-                    // Agent is active and at desk — check if they wandered off
+                    // If isActive is false, they should go idle
                     if (!ch.isActive) {
                         ch.state = CharacterState.IDLE;
                         ch.wanderTimer = rand(WANDER_TIMER_MIN, WANDER_TIMER_MAX);
+                        break;
                     }
-                    // Make sure they're seated; if not, path back
-                    if (ch.path.length === 0) {
-                        const atSeat = this._isAtSeat(ch);
-                        if (!atSeat) this._pathToSeat(ch);
+                    // Enforcement: If active but disconnected from desk, path back
+                    if (ch.path.length === 0 && !this._isAtSeat(ch)) {
+                        this._pathToSeat(ch);
                     }
                     break;
 
@@ -302,17 +311,17 @@ export class OfficeState {
                         this._pathToSeat(ch);
                         break;
                     }
-                    // Idle countdown
+                    // Idle countdown for roaming
                     ch.wanderTimer -= dt;
                     if (ch.wanderTimer <= 0) {
                         if (ch.wanderCount >= ch.wanderLimit) {
-                            // Enough wandering — return to seat and rest
+                            // Return to seat to rest
                             ch.state = CharacterState.WALK;
                             this._pathToSeat(ch);
                             ch.wanderCount = 0;
                             ch.wanderLimit = randInt(WANDER_LIMIT_MIN, WANDER_LIMIT_MAX);
                         } else {
-                            // Wander to a random tile
+                            // Roam to random tile
                             ch.state = CharacterState.WALK;
                             this._pathToRandom(ch);
                             ch.wanderCount++;
@@ -321,15 +330,22 @@ export class OfficeState {
                     break;
 
                 case CharacterState.WALK:
-                    // If agent became active while walking somewhere else, re-path to seat
+                    // Mid-walk activation: if they were roaming, divert to desk
                     if (ch.isActive && !this._pathLeadsToSeat(ch)) {
                         this._pathToSeat(ch);
                     }
-                    this._stepMovement(ch, dt);
                     break;
 
-                // Trading-specific states: no movement, just visual/animation
                 default:
+                    // Special Trading States (SIGNAL_FOUND, CONFLUENCE, etc.)
+                    // Ensure active agents path back even while displaying special effects
+                    if (ch.isActive && ch.path.length === 0 && !this._isAtSeat(ch)) {
+                        this._pathToSeat(ch);
+                    }
+                    // If they go inactive during a special state, revert to IDLE
+                    if (!ch.isActive) {
+                        ch.state = CharacterState.IDLE;
+                    }
                     break;
             }
         }
@@ -338,28 +354,7 @@ export class OfficeState {
     // ── Movement Helpers ─────────────────────────────────────────────────────
 
     _stepMovement(ch, dt) {
-        if (ch.path.length === 0) {
-            // Arrived at destination
-            const atSeat = this._isAtSeat(ch);
-            if (atSeat) {
-                ch.state = ch.isActive ? CharacterState.WORKING : CharacterState.IDLE;
-                // If returning to seat while idle, set a rest period before wandering
-                if (!ch.isActive) {
-                    ch.wanderTimer = rand(SEAT_REST_MIN, SEAT_REST_MAX);
-                }
-                // Snap position precisely to seat
-                const seat = this.seats.get(ch.seatId);
-                ch.x = seat.x;
-                ch.y = seat.y;
-                ch.col = seat.col;
-                ch.row = seat.row;
-            } else {
-                // Arrived at a wander tile
-                ch.state = CharacterState.IDLE;
-                ch.wanderTimer = rand(WANDER_TIMER_MIN / 2, WANDER_TIMER_MAX / 2);
-            }
-            return;
-        }
+        if (ch.path.length === 0) return;
 
         // Advance moveProgress
         ch.moveProgress += dt / WALK_SPEED;
@@ -378,13 +373,36 @@ export class OfficeState {
                 const upcoming = ch.path[0];
                 ch.nextX = upcoming.col * GRID_SIZE + GRID_SIZE / 2;
                 ch.nextY = upcoming.row * GRID_SIZE + GRID_SIZE / 2;
-                // Update facing direction
+                // Update facing
                 const dx = ch.nextX - ch.x;
                 const dy = ch.nextY - ch.y;
                 if (Math.abs(dx) > Math.abs(dy)) {
                     ch.facing = dx > 0 ? 'right' : 'left';
                 } else {
                     ch.facing = dy > 0 ? 'down' : 'up';
+                }
+            } else {
+                // ARRIVAL
+                const atSeat = this._isAtSeat(ch);
+                if (atSeat) {
+                    // Only overwrite state if we aren't in a high-priority trading state
+                    if (ch.state === CharacterState.WALK || ch.state === CharacterState.IDLE) {
+                        ch.state = ch.isActive ? CharacterState.WORKING : CharacterState.IDLE;
+                    }
+                    // Reset rest timer if we arrived at seat while idle
+                    if (!ch.isActive) {
+                        ch.wanderTimer = rand(SEAT_REST_MIN, SEAT_REST_MAX);
+                    }
+                    // Snap position precisely to seat
+                    const seat = this.seats.get(ch.seatId);
+                    ch.x = seat.x;
+                    ch.y = seat.y;
+                    ch.col = seat.col;
+                    ch.row = seat.row;
+                } else {
+                    // Finished a wander step
+                    ch.state = CharacterState.IDLE;
+                    ch.wanderTimer = rand(WANDER_TIMER_MIN / 2, WANDER_TIMER_MAX / 2);
                 }
             }
             ch.moveProgress = 0;
@@ -420,14 +438,27 @@ export class OfficeState {
     _pathToRandom(ch) {
         if (this.walkableTilesList.length === 0) return;
 
-        // Pick a random walkable tile (within 8 cells radius for realism)
-        const nearby = this.walkableTilesList.filter(t => {
-            const dc = Math.abs(t.col - ch.col);
-            const dr = Math.abs(t.row - ch.row);
-            return dc <= 8 && dr <= 8 && (dc + dr) >= 2; // not too close
+        // Find the designated room bounds for this agent's seat
+        const seat = this.seats.get(ch.seatId);
+        const bounds = seat?.bounds || { minC: 0, maxC: MAP_COLS - 1, minR: 0, maxR: MAP_ROWS - 1 };
+
+        // Restrict to tiles within their assigned room bounds
+        const roomTiles = this.walkableTilesList.filter(t => {
+            return t.col >= bounds.minC && t.col <= bounds.maxC &&
+                   t.row >= bounds.minR && t.row <= bounds.maxR;
         });
 
-        const pool = nearby.length > 0 ? nearby : this.walkableTilesList;
+        // Fallback to all walkable tiles if room logic fails
+        const basePool = roomTiles.length > 0 ? roomTiles : this.walkableTilesList;
+
+        // Pick a random walkable tile (within 8 cells radius for realism, bounded to room)
+        const nearby = basePool.filter(t => {
+            const dc = Math.abs(t.col - ch.col);
+            const dr = Math.abs(t.row - ch.row);
+            return dc <= 8 && dr <= 8 && (dc + dr) >= 1; // not precisely the same spot
+        });
+
+        const pool = nearby.length > 0 ? nearby : basePool;
         const target = pool[Math.floor(Math.random() * pool.length)];
 
         const path = findPath(ch.col, ch.row, target.col, target.row, this.blockedTiles, MAP_COLS, MAP_ROWS);

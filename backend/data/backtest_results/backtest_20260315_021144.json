@@ -1,0 +1,213 @@
+{
+  "timestamp": "2026-03-15T02:11:44.703729",
+  "tokens": [
+    {
+      "token_name": "Token A (Good)",
+      "token_address": "TokenA123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 7.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 7.8,
+        "discord_found": false,
+        "discord_stats": {},
+        "telegram_found": false,
+        "narrative_strength": 0,
+        "confidence": 0.5,
+        "full_analysis": {
+          "agent_id": 4,
+          "token_address": "TokenA123456789012345678901234567890",
+          "status": "CLEARED",
+          "score": 7.8,
+          "narrative_themes": {},
+          "narrative_bonus_awarded": false,
+          "execution_time_ms": 5.755
+        }
+      },
+      "agent_5": {
+        "status": "GATE_PASSED",
+        "composite_score": 8.035,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Confluence of signals"
+      },
+      "master_rules": {
+        "status": "GATE_PASSED",
+        "score": 7.8,
+        "reason": "Tier 1 critical rules passed",
+        "position_multiplier": 1.1
+      },
+      "risk_manager": {
+        "status": "APPROVED",
+        "equity_risk_pct": 1.8,
+        "position_pct": 15.0,
+        "reward_ratio": 5.0,
+        "checks_passed": 5
+      },
+      "final_status": "EXECUTE",
+      "final_score": 8.035,
+      "latencies": {
+        "agent_1": 0.00028967857360839844,
+        "agent_2": 0.00027179718017578125,
+        "agent_3": 0.00025653839111328125,
+        "agent_4": 0.010128259658813477,
+        "agent_5": 0.0003001689910888672,
+        "master_rules": 0.0034942626953125,
+        "risk_manager": 0.0002830028533935547
+      },
+      "total_latency": 0.11405730247497559
+    },
+    {
+      "token_name": "Token B (Whale)",
+      "token_address": "TokenB123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "KILLED",
+        "safety_score": 0.0,
+        "filters_passed": 0,
+        "total_filters": 9,
+        "failed_filter": "liquidity_locked",
+        "confidence": "none"
+      },
+      "agent_3": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_4": {
+        "status": "SKIPPED",
+        "score": 0
+      },
+      "agent_5": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 2 failed",
+        "composite_score": 0
+      },
+      "master_rules": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed",
+        "score": 0
+      },
+      "risk_manager": {
+        "status": "GATE_BLOCKED",
+        "reason": "Agent 5 failed"
+      },
+      "final_status": "SKIP",
+      "final_score": 0.0,
+      "latencies": {
+        "agent_1": 0.00032138824462890625,
+        "agent_2": 0.0003407001495361328
+      },
+      "total_latency": 0.07358217239379883
+    },
+    {
+      "token_name": "Token C (Scam)",
+      "token_address": "TokenC123456789012345678901234567890",
+      "agent_1": {
+        "status": "SCORED",
+        "discovery_score": 6.5,
+        "confidence": "medium",
+        "reasoning": "Standard discovery metrics"
+      },
+      "agent_2": {
+        "status": "CLEARED",
+        "safety_score": 10.0,
+        "filters_passed": 9,
+        "total_filters": 9,
+        "failed_filter": null,
+        "confidence": "high"
+      },
+      "agent_3": {
+        "status": "ANALYZED",
+        "wallet_score": 7.5,
+        "smart_wallets_detected": 2,
+        "insider_activity": "low",
+        "confidence": "medium"
+      },
+      "agent_4": {
+        "status": "ANALYZED",
+        "intel_score": 7.8,
+        "discord_found": false,
+        "discord_stats": {},
+        "telegram_found": false,
+        "narrative_strength": 0,
+        "confidence": 0.5,
+        "full_analysis": {
+          "agent_id": 4,
+          "token_address": "TokenC123456789012345678901234567890",
+          "status": "CLEARED",
+          "score": 7.8,
+          "narrative_themes": {},
+          "narrative_bonus_awarded": false,
+          "execution_time_ms": 4.4799999999999995
+        }
+      },
+      "agent_5": {
+        "status": "GATE_PASSED",
+        "composite_score": 8.035,
+        "confluence_count": 4,
+        "position_multiplier": 1.1,
+        "reason": "Confluence of signals"
+      },
+      "master_rules": {
+        "status": "GATE_PASSED",
+        "score": 7.8,
+        "reason": "Tier 1 critical rules passed",
+        "position_multiplier": 1.1
+      },
+      "risk_manager": {
+        "status": "APPROVED",
+        "equity_risk_pct": 1.8,
+        "position_pct": 15.0,
+        "reward_ratio": 5.0,
+        "checks_passed": 5
+      },
+      "final_status": "EXECUTE",
+      "final_score": 8.035,
+      "latencies": {
+        "agent_1": 0.0002465248107910156,
+        "agent_2": 0.00032210350036621094,
+        "agent_3": 0.00036072731018066406,
+        "agent_4": 0.008943319320678711,
+        "agent_5": 0.0003616809844970703,
+        "master_rules": 0.0033931732177734375,
+        "risk_manager": 0.00030303001403808594
+      },
+      "total_latency": 0.056411027908325195
+    }
+  ],
+  "statistics": {
+    "total_tokens": 3,
+    "passed_agent_2": 2,
+    "passed_agent_5": 2,
+    "passed_master_rules": 2,
+    "passed_risk_manager": 2,
+    "final_approved": 2,
+    "avg_latency": 0.0,
+    "max_latency": 0.0,
+    "min_latency": 99999.0
+  }
+}
