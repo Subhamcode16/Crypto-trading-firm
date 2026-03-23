@@ -8,12 +8,12 @@ class Config:
     
     def __init__(self):
         # Load environment variables from secrets.env
-        env_path = Path(__file__).parent.parent / 'secrets.env'
+        env_path = Path(__file__).parent.parent.parent / 'secrets.env'
         if env_path.exists():
             load_dotenv(env_path)
         
         # Load JSON config
-        config_path = Path(__file__).parent.parent / 'config' / 'config.json'
+        config_path = Path(__file__).parent.parent.parent / 'config' / 'config.json'
         if not config_path.exists():
             raise FileNotFoundError(f'Config file not found: {config_path}')
         
@@ -52,3 +52,7 @@ class Config:
     def get_optional_config(self, key: str, default=None):
         """Get config value with default fallback"""
         return self.data.get(key, default)
+
+    def to_dict(self):
+        """Return full configuration data as a dictionary"""
+        return self.data

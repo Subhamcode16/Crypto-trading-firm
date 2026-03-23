@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 from datetime import datetime
 from typing import List, Dict, Optional
 import websockets
@@ -42,7 +43,7 @@ class Agent1Discovery:
         
         # Tracking & Deduplication
         self.analyzed_recently = {}  # {address: timestamp}
-        self.ws_url = "ws://localhost:8080"
+        self.ws_url = os.getenv("WS_SERVER_URL", "ws://localhost:8080")
         self.is_scanning = False
         
         logger.info("🕵️ Agent 1 (Discovery) initialized")

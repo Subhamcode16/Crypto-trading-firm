@@ -39,7 +39,7 @@ export const useAgentStore = create((set, get) => ({
 
     fetchAgentLogs: async (agentId) => {
         try {
-            const response = await fetch(`http://localhost:8000/api/v1/agents/${agentId}/logs`);
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/v1/agents/${agentId}/logs`);
             const data = await response.json();
             set((state) => ({
                 agents: {

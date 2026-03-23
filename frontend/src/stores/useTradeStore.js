@@ -9,7 +9,7 @@ export const useTradeStore = create((set) => ({
 
     fetchInitialCapital: async () => {
         try {
-            const response = await fetch('http://localhost:8000/api/portfolio/balance');
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/portfolio/balance`);
             const result = await response.json();
             if (result.status === 'success') {
                 set({ initialCapital: result.initial_capital });
@@ -22,7 +22,7 @@ export const useTradeStore = create((set) => ({
     fetchTradeHistory: async (userId, apiKey) => {
         set({ isLoadingHistory: true });
         try {
-            const response = await fetch(`http://localhost:8000/api/trades/history/${userId}`, {
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/trades/history/${userId}`, {
                 method: 'GET',
                 headers: {
                     'X-Admin-Key': apiKey,

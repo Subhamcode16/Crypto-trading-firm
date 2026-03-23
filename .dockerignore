@@ -1,0 +1,43 @@
+# Dependencies
+**/node_modules
+**/venv
+**/venv_temp
+**/__pycache__
+**/.vite
+
+# Build artifacts
+**/dist
+**/*.pyc
+**/.pytest_cache
+
+# Secrets (never bake into images)
+**/.env
+**/secrets.env
+**/*.log
+
+# Version control
+**/.git
+**/.gitignore
+
+# IDE
+**/.vscode
+**/.idea
+
+# Documentation
+**/*.md
+**/docs
+**/files
+
+# Test files
+**/test_*.py
+**/verify_*.py
+**/backtest_*.py
+**/debug_*.py
+**/check_*.py
+**/*.log
+**/*.txt
+
+# Docker files (don't copy docker files into images)
+docker-compose.yml
+docker.env.template
+.dockerignore

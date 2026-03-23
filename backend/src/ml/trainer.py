@@ -230,8 +230,40 @@ class MLTrainer:
         try:
             with open(outcome_path, 'w') as f:
                 json.dump(outcome, f, indent=2)
+            logger.info(f"[TRAINER] Outcome saved: {outcome_path}")
         except Exception as e:
             logger.error(f"[TRAINER] Failed to save outcome: {e}")
+
+    def collect_outcomes_from_disk(self) -> List[Dict]:
+        """
+        Scan ml/data/ for outcome_*.json files and return them as a list.
+        This allows retrain() to be called without external input.
+        """
+        outcomes = []
+        pattern = os.path.join(DATA_DIR, "outcome_*.json")
+        for filepath in glob.glob(pattern):
+            try:
+                with open(filepath) as f:
+                    outcome = json.load(f)
+                outcomes.append(outcome)
+            except Exception as e:
+                logger.debug(f"[TRAINER] Skipping outcome file {filepath}: {e}")
+        logger.info(f"[TRAINER] Collected {len(outcomes)} outcomes from disk")
+        return outcomes
+
+    def retrain_from_disk(self) -> Dict:
+        """
+        Convenience wrapper: collect outcomes from disk and retrain.
+        Called by the weekly scheduler job in main.py.
+        """
+        outcomes = self.collect_outcomes_from_disk()
+        if not outcomes:
+            return {
+                "status": "skipped",
+                "reason": "No outcome files found on disk",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        return self.retrain(outcomes)
 
 
 if __name__ == "__main__":
@@ -246,3 +278,4 @@ if __name__ == "__main__":
     trainer = MLTrainer()
     report = trainer.retrain(mock_outcomes)
     print(json.dumps(report, indent=2))
+

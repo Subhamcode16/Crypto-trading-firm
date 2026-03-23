@@ -10,6 +10,8 @@ from pathlib import Path
 import time
 import signal
 from datetime import datetime
+import asyncio
+import json
 
 # Add project root to path (so src imports work)
 project_root = Path(__file__).parent.parent
@@ -36,6 +38,9 @@ from src.agents.agent_6_macro_sentinel import Agent6MacroSentinel
 from src.agents.agent_7_risk_manager import Agent7RiskManager
 from src.agents.agent_8_trading_bot import TradingBot
 from src.agents.agent_9_performance_analyst import PerformanceAnalyst
+from src.ml.trainer import MLTrainer
+from src.apis.rugcheck_client import RugcheckClient
+from src.scoring.safety_score_calculator import SafetyScorer
 
 logger = setup_logger('main')
 
@@ -171,6 +176,12 @@ class TradingBotApp:
         self.researcher_bot.trading_bot     = self.trading_bot
         self.researcher_bot.agent_9         = self.performance_analyst
         
+        # Inject trading_bot ref into Agent 9 for open positions data
+        self.performance_analyst.trading_bot = self.trading_bot
+        
+        # Wire Risk Manager -> Trading Bot for liquidation
+        self.risk_manager_a7.trading_bot = self.trading_bot
+        
         # Start real-time discovery (Agent 4)
         asyncio.create_task(self.agent_4_intel.start())
         
@@ -196,8 +207,13 @@ class TradingBotApp:
 
     async def strategic_review_job(self):
         """Called every 4 hours - Agent 0 strategic oversight"""
-        logger.info('🏛️ Strategic review job running...')
+        logger.info('Strategic review job running...')
         await self.commander.run_strategic_review()
+
+    async def agent_digest_job(self):
+        """Called every 4 hours - comprehensive agent activity digest"""
+        logger.info('Agent Digest job running...')
+        await self.performance_analyst.generate_agent_digest()
     
     async def telegram_poll_job(self):
         """No longer needed - Application framework handles its own polling."""
@@ -207,6 +223,24 @@ class TradingBotApp:
         """Called at midnight UTC - reset daily counters"""
         logger.info('🌙 Midnight reset job running...')
         await self.researcher_bot.reset_daily_counters()
+    
+    async def weekly_ml_retrain_job(self):
+        """Called weekly - retrain XGBoost pump prediction model"""
+        logger.info('🧠 Weekly ML retraining job running...')
+        try:
+            trainer = MLTrainer()
+            report = trainer.retrain_from_disk()
+            logger.info(f"[ML] Retraining report: {report}")
+            
+            if report.get('status') == 'completed':
+                action = report.get('action', 'unknown')
+                accuracy = report.get('new_accuracy', 0)
+                samples = report.get('training_samples', 0)
+                logger.info(f"🧠 [ML] Retraining complete: {action} | accuracy={accuracy:.3f} | samples={samples}")
+            else:
+                logger.info(f"🧠 [ML] Retraining skipped: {report.get('reason', 'unknown')}")
+        except Exception as e:
+            logger.error(f'❌ ML retraining failed: {e}')
     
     async def start(self):
         """Start the trading bot"""
@@ -232,6 +266,20 @@ class TradingBotApp:
                 "Strategic Review", 
                 self.strategic_review_job, 
                 60 * 4   # minutes → runs every 4h
+            )
+            
+            # Agent Digest (every 4 hours, aligned with Strategic Review)
+            self.scheduler.add_custom_job(
+                "Agent Digest",
+                self.agent_digest_job,
+                60 * 4   # minutes → runs every 4h
+            )
+            
+            # ML Retraining (every 7 days)
+            self.scheduler.add_custom_job(
+                "ML Retrain",
+                self.weekly_ml_retrain_job,
+                60 * 24 * 7  # minutes → runs every 7 days
             )
             
             # Start Telegram Bot in the background

@@ -2,20 +2,25 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict
 from src.ml.learning_loop import LearningLoop
+from src.ml.trainer import MLTrainer
 
 logger = logging.getLogger(__name__)
 
 class PerformanceAnalyst:
     """
     Agent-9: The firm's Performance Analyst and Communications Director.
-    Responsiblities include formatting and dispatching Telegram alerts for trades,
-    kill switch events, and generating daily EOD summaries.
+    Responsibilities include formatting and dispatching Telegram alerts for trades,
+    kill switch events, generating daily EOD summaries, and comprehensive 4-hour digests.
     """
     def __init__(self, db_client, telegram_client):
         self.db = db_client
         self.telegram = telegram_client
+        self.trading_bot = None  # Injected by main.py for open positions data
         self.learning_loop = LearningLoop(db_client)
-        logger.info("[AGENT_9] Performance Analyst initialized with Learning Loop.")
+        self.ml_trainer = MLTrainer()
+        # Accumulate scan stats across cycles for 4-hour digest
+        self._digest_scan_history = []
+        logger.info("[AGENT_9] Performance Analyst initialized with Learning Loop + ML Trainer.")
 
     async def notify_trade_opened(self, position) -> bool:
         """Called by Agent-8 when a trade is successfully executed and entered."""
@@ -55,25 +60,68 @@ Trace ID: {position.position_id[:8]}
         return await self._send_msg(message)
 
     async def notify_pipeline_summary(self, stats: Dict) -> bool:
-        """Send a summary of the discovery pipeline for the latest scan."""
+        """Send a detailed summary of the discovery pipeline for the latest scan."""
         if not self.telegram:
             return False
+        
+        # Store for digest accumulation
+        self._digest_scan_history.append(stats.copy())
             
-        # Only notify if at least one token reached Agent 6 (Macro)
-        if stats.get('agent_6_passed', 0) == 0:
+        # Only notify if at least one token was found
+        if stats.get('total_found', 0) == 0:
             return False
 
-        message = f"""
-PIPELINE SCAN SUMMARY
+        total_found = stats.get('total_found', 0)
+        a2_cleared = stats.get('agent_2_cleared', 0)
+        a2_killed = stats.get('agent_2_killed', 0)
+        a5_cleared = stats.get('agent_5_cleared', 0)
+        a5_killed = stats.get('agent_5_killed', 0)
+        a6_passed = stats.get('agent_6_passed', 0)
+        a6_held = stats.get('agent_6_held', 0)
+        a7_passed = stats.get('agent_7_passed', 0)
+        a7_blocked = stats.get('agent_7_blocked', 0)
+        a8_executed = stats.get('agent_8_executed', 0)
+        a8_rejected = stats.get('agent_8_rejected', 0)
+        
+        cleared_tokens = stats.get('cleared_tokens', [])
+        executed_tokens = stats.get('executed_tokens', [])
+        kill_reasons = stats.get('kill_reasons', [])
 
-Tokens Discovered (Agent 1): {stats.get('total_found', 0)}
-Tokens Processed (Intelligence Division): {stats.get('total_processed', 0)}
-Passed Agent 6 (Macro): {stats.get('agent_6_passed', 0)}
-Approved Agent 7 (Risk): {stats.get('agent_7_passed', 0)}
-Executed Agent 8 (Trade): {stats.get('agent_8_executed', 0)}
-
-Status: Scan Cycle Complete.
-"""
+        # Build per-agent breakdown
+        lines = [
+            "\ud83d\udce1 <b>SCAN CYCLE REPORT</b>",
+            "",
+            f"\ud83d\udd75\ufe0f <b>Agent 1 (Discovery):</b> {total_found} tokens found",
+        ]
+        
+        if total_found > 0:
+            lines.append(f"\ud83d\udd2c <b>Agent 2 (On-Chain Safety):</b> {a2_cleared} cleared, {a2_killed} killed")
+            lines.append(f"\ud83d\udd0d <b>Agent 3 (Wallet Tracker):</b> {a2_cleared} analyzed")
+            lines.append(f"\ud83d\udce1 <b>Agent 4 (Intel/Sentiment):</b> {a2_cleared} analyzed")
+            lines.append(f"\u2696\ufe0f <b>Agent 5 (Signal Aggregator):</b> {a5_cleared} cleared, {a5_killed} dropped")
+            lines.append("")
+            
+            if a5_cleared > 0:
+                lines.append(f"\ud83d\udcca <b>Agent 6 (Macro Sentinel):</b> {a6_passed} passed, {a6_held} held")
+                lines.append(f"\ud83d\udee1\ufe0f <b>Agent 7 (Risk Manager):</b> {a7_passed} approved, {a7_blocked} blocked")
+                lines.append(f"\u26a1 <b>Agent 8 (Execution):</b> {a8_executed} filled, {a8_rejected} rejected")
+        
+        if executed_tokens:
+            lines.append("")
+            lines.append("<b>Executed Tokens:</b>")
+            for t in executed_tokens[:5]:
+                lines.append(f"  \ud83d\udcb8 {t.get('symbol', '?')} @ ${t.get('price', 0):.8f}")
+        
+        if kill_reasons:
+            lines.append("")
+            lines.append("<b>Drop Reasons:</b>")
+            for r in kill_reasons[-3:]:
+                lines.append(f"  \u274c {r}")
+        
+        lines.append("")
+        lines.append("<i>Scan Cycle Complete</i>")
+        
+        message = "\n".join(lines)
         return await self._send_msg(message)
 
 
@@ -128,6 +176,18 @@ PnL: <b>{pnl_str} ({pct_str})</b>
                 message += f"\n\n🧠 <b>AI Lesson:</b> {lesson.get('learned_trait')}"
         except Exception as e:
             logger.error(f"[AGENT_9] Learning loop trigger failed: {e}")
+
+        # Save trade outcome for ML trainer (XGBoost retraining pipeline)
+        try:
+            price_change_pct = ((position.current_price - position.entry_price) / position.entry_price) * 100 if position.entry_price > 0 else 0
+            self.ml_trainer.save_outcome(
+                trade_id=position.signal_id,
+                price_change_pct=price_change_pct,
+                profit_usd=position.pnl_usd
+            )
+            logger.info(f"[AGENT_9] 🧠 ML outcome saved for {position.token} (trade_id={position.signal_id})")
+        except Exception as e:
+            logger.error(f"[AGENT_9] ML outcome save failed: {e}")
 
         return await self._send_msg(message)
 
@@ -212,6 +272,258 @@ Win Rate: {win_rate:.1f}%
         except Exception as e:
             logger.error(f"[AGENT_9] Failed to generate daily report: {e}")
             return False
+
+    async def generate_agent_digest(self, user_id: str = "default_user") -> bool:
+        """
+        Generate a comprehensive 4-hour agent digest covering all agent activity.
+        Sent alongside the Strategic Review every 4 hours.
+        """
+        if not self.telegram or not self.db:
+            return False
+
+        try:
+            lines = [
+                "📋 <b>4-HOUR AGENT ACTIVITY DIGEST</b>",
+                f"⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            ]
+
+            # ── AGENTS 1-5: Research Division Summary ──
+            scan_count = len(self._digest_scan_history)
+            if scan_count > 0:
+                total_found = sum(s.get('total_found', 0) for s in self._digest_scan_history)
+                total_a2_cleared = sum(s.get('agent_2_cleared', 0) for s in self._digest_scan_history)
+                total_a2_killed = sum(s.get('agent_2_killed', 0) for s in self._digest_scan_history)
+                total_a5_cleared = sum(s.get('agent_5_cleared', 0) for s in self._digest_scan_history)
+                total_a5_killed = sum(s.get('agent_5_killed', 0) for s in self._digest_scan_history)
+                
+                lines.extend([
+                    "<b>🏢 RESEARCH DIVISION (Agents 1-5)</b>",
+                    f"Scans Completed: {scan_count}",
+                    "",
+                    f"🕵️ <b>Agent 1 (Discovery):</b>",
+                    f"  Tokens Found: {total_found}",
+                    "",
+                    f"🔬 <b>Agent 2 (On-Chain Safety):</b>",
+                    f"  Cleared: {total_a2_cleared} | Killed: {total_a2_killed}",
+                    f"  Pass Rate: {(total_a2_cleared / max(total_found, 1)) * 100:.0f}%",
+                    "",
+                    f"🔍 <b>Agent 3 (Wallet Tracker):</b>",
+                    f"  Analyzed: {total_a2_cleared} tokens for smart money signals",
+                    "",
+                    f"📡 <b>Agent 4 (Intel/Sentiment):</b>",
+                    f"  Community sentiment checked on {total_a2_cleared} tokens",
+                    "",
+                    f"⚖️ <b>Agent 5 (Signal Aggregator):</b>",
+                    f"  Cleared: {total_a5_cleared} | Dropped: {total_a5_killed}",
+                    f"  Pass Rate: {(total_a5_cleared / max(total_a2_cleared, 1)) * 100:.0f}%",
+                    "",
+                ])
+                
+                # Collect all kill reasons from scans
+                all_kill_reasons = []
+                for s in self._digest_scan_history:
+                    all_kill_reasons.extend(s.get('kill_reasons', []))
+                if all_kill_reasons:
+                    lines.append("<b>Top Drop Reasons:</b>")
+                    # Deduplicate and show top 5
+                    from collections import Counter
+                    reason_counts = Counter(all_kill_reasons)
+                    for reason, count in reason_counts.most_common(5):
+                        lines.append(f"  ❌ {reason} (×{count})")
+                    lines.append("")
+            else:
+                lines.extend([
+                    "<b>🏢 RESEARCH DIVISION (Agents 1-5)</b>",
+                    "No scans completed in this period.",
+                    "",
+                ])
+
+            # ── AGENTS 6-7: Command Division Strategy ──
+            lines.extend([
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "<b>🎖️ COMMAND DIVISION (Agents 6-7)</b>",
+                "",
+            ])
+            
+            # Agent 6 Macro State
+            try:
+                macro_regime = await self.db.get_system_state("macro_regime") or "unknown"
+                macro_summary = await self.db.get_system_state("macro_summary") or "No macro data"
+                lines.extend([
+                    f"📊 <b>Agent 6 (Macro Sentinel):</b>",
+                    f"  Market Regime: <b>{macro_regime.upper()}</b>",
+                    f"  Assessment: {macro_summary[:150]}",
+                ])
+                
+                # Gather Agent 6 stats from scans
+                total_a6_passed = sum(s.get('agent_6_passed', 0) for s in self._digest_scan_history)
+                total_a6_held = sum(s.get('agent_6_held', 0) for s in self._digest_scan_history)
+                lines.extend([
+                    f"  Signals Passed: {total_a6_passed} | Held: {total_a6_held}",
+                    f"  Indicators: BTC/SOL EMA50, Bollinger Bands (%B), RSI(14)",
+                    "",
+                ])
+            except Exception as e:
+                lines.append(f"  ⚠️ Could not fetch macro state: {e}")
+                lines.append("")
+
+            # Agent 7 Risk State
+            try:
+                today = datetime.utcnow().strftime("%Y-%m-%d")
+                pnl_state = await self.db.get_daily_portfolio_state(user_id, today)
+                ks_state = await self.db.get_kill_switch(user_id)
+                risk_tier_high = float(await self.db.get_system_state("risk_tier_high") or 0.20)
+                loss_limit = float(await self.db.get_system_state("daily_loss_limit_pct") or 0.30)
+                
+                total_a7_passed = sum(s.get('agent_7_passed', 0) for s in self._digest_scan_history)
+                total_a7_blocked = sum(s.get('agent_7_blocked', 0) for s in self._digest_scan_history)
+                
+                realized_loss = pnl_state.get("realized_loss_usd", 0.0)
+                daily_limit = pnl_state.get("daily_loss_limit_usd", 999.0)
+                
+                lines.extend([
+                    f"🛡️ <b>Agent 7 (Risk Manager):</b>",
+                    f"  Kill Switch: Tier <b>{ks_state.get('tier', 0)}</b>",
+                    f"  Position Cap: <b>{risk_tier_high:.0%}</b> | Loss Limit: <b>{loss_limit:.0%}</b>",
+                    f"  Daily Loss: ${realized_loss:.4f} / ${daily_limit:.4f}",
+                    f"  Approved: {total_a7_passed} | Blocked: {total_a7_blocked}",
+                    f"  SL Strategy: -20% (High), -10% (Venture/Low)",
+                    f"  TP Strategy: TP1 at 2×, TP2 at 4×, Trailing 50%",
+                    "",
+                ])
+                
+                # Strategy Discussion
+                if total_a7_passed > 0:
+                    bullish_reason = "Signals meeting composite threshold with macro clearance"
+                    if macro_regime in ["bullish"]:
+                        bullish_reason = "Bullish regime — full allocation multiplier active"
+                    elif macro_regime in ["choppy", "flat"]:
+                        bullish_reason = f"{macro_regime.title()} regime — reduced allocation (×0.5-0.7)"
+                    lines.extend([
+                        "<b>Strategy Discussion:</b>",
+                        f"  📈 Outlook: {bullish_reason}",
+                        f"  💡 Risk Tiers: High(≥9.0)=20%, Med(≥8.0)=10%, Low(≥7.0)=5%, Venture(≥6.0)=2%",
+                        "",
+                    ])
+            except Exception as e:
+                lines.append(f"  ⚠️ Could not fetch risk state: {e}")
+                lines.append("")
+
+            # ── AGENT 8: Execution Summary ──
+            lines.extend([
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "<b>⚡ EXECUTION DIVISION (Agent 8)</b>",
+                "",
+            ])
+            
+            total_a8_executed = sum(s.get('agent_8_executed', 0) for s in self._digest_scan_history)
+            total_a8_rejected = sum(s.get('agent_8_rejected', 0) for s in self._digest_scan_history)
+            
+            lines.extend([
+                f"Trades Executed: {total_a8_executed} | Rejected: {total_a8_rejected}",
+            ])
+            
+            # Show executed token details
+            all_executed = []
+            for s in self._digest_scan_history:
+                all_executed.extend(s.get('executed_tokens', []))
+            
+            if all_executed:
+                lines.append("")
+                lines.append("<b>Executed Trades:</b>")
+                for t in all_executed:
+                    symbol = t.get('symbol', '?')
+                    price = t.get('price', 0)
+                    size = t.get('size_usd', 0)
+                    sl_pct = t.get('sl_pct', 0)
+                    tp1_mult = t.get('tp1_mult', 0)
+                    rationale = t.get('rationale', 'Standard entry')
+                    lines.extend([
+                        f"  💸 <b>{symbol}</b>",
+                        f"     Entry: ${price:.8f} | Size: ${size:.4f}",
+                        f"     SL: -{sl_pct:.0%} | TP1: {tp1_mult:.0f}× | TP2: {t.get('tp2_mult', 0):.0f}×",
+                        f"     Logic: {rationale[:80]}",
+                    ])
+            
+            # Open positions from Agent 8
+            open_positions = await self._get_open_positions()
+            if open_positions:
+                lines.append("")
+                lines.append(f"<b>Open Positions ({len(open_positions)}):</b>")
+                for pos in open_positions:
+                    pnl = pos.get('pnl_usd', 0)
+                    pnl_emoji = '🟢' if pnl >= 0 else '🔴'
+                    lines.extend([
+                        f"  {pnl_emoji} <b>{pos.get('token', '?')}</b>",
+                        f"     Entry: ${pos.get('entry_price', 0):.8f} | Current: ${pos.get('current_price', 0):.8f}",
+                        f"     Size: ${pos.get('remaining_size_usd', 0):.4f} | PnL: ${pnl:.4f}",
+                        f"     SL: ${pos.get('sl_price', 0):.8f} | TP1: ${pos.get('tp1_price', 0):.8f}",
+                    ])
+            else:
+                lines.append("")
+                lines.append("No open positions.")
+
+            # ── DAILY PNL FOOTER ──
+            try:
+                daily_pnl = await self._get_daily_pnl(user_id)
+                pnl_str = f"+${daily_pnl:,.4f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):,.4f}"
+                lines.extend([
+                    "",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    f"💰 <b>Daily PnL: {pnl_str}</b>",
+                    "<i>Digest generated by Agent 9 — Performance Analyst</i>",
+                ])
+            except:
+                pass
+
+            # Clear accumulated scan history for next period
+            self._digest_scan_history = []
+
+            message = "\n".join(lines)
+            return await self._send_msg(message)
+
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to generate agent digest: {e}")
+            return False
+
+    async def _get_open_positions(self) -> list:
+        """Get open positions from Agent 8 trading bot or DB."""
+        positions = []
+        try:
+            # Try to get from Agent 8 in-memory state first
+            if self.trading_bot and hasattr(self.trading_bot, 'active_positions'):
+                for pos_id, pos in self.trading_bot.active_positions.items():
+                    positions.append({
+                        'token': pos.token,
+                        'entry_price': pos.entry_price,
+                        'current_price': pos.current_price,
+                        'remaining_size_usd': pos.remaining_size_usd,
+                        'sl_price': pos.sl_price,
+                        'tp1_price': pos.tp1_price,
+                        'tp2_price': pos.tp2_price,
+                        'pnl_usd': pos.pnl_usd,
+                        'status': pos.status,
+                    })
+            elif self.db:
+                # Fallback: read from DB
+                all_positions = await self.db.get_all_positions()
+                for p in all_positions.get('open', []):
+                    positions.append({
+                        'token': p.get('token', '?'),
+                        'entry_price': float(p.get('entryPrice', 0)),
+                        'current_price': float(p.get('currentPrice', p.get('entryPrice', 0))),
+                        'remaining_size_usd': float(p.get('remainingSizeUsd', p.get('positionSizeUsd', 0))),
+                        'sl_price': float(p.get('stopLossPrice', 0)),
+                        'tp1_price': float(p.get('tp1Price', 0)),
+                        'tp2_price': float(p.get('tp2Price', 0)),
+                        'pnl_usd': float(p.get('pnlUsd', 0)),
+                        'status': p.get('status', 'open'),
+                    })
+        except Exception as e:
+            logger.warning(f"[AGENT_9] Could not fetch open positions: {e}")
+        return positions
 
     async def _get_daily_pnl(self, user_id: str) -> float:
         """Helper to get current daily PnL."""

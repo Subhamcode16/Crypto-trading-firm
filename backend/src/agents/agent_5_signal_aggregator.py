@@ -499,6 +499,9 @@ class Agent5SignalAggregator:
             pump_prob = 0.5  # neutral default
             if self.pump_predictor and self.feature_builder:
                 try:
+                    # Generate trade_id BEFORE build() so it's embedded in the feature vector
+                    trade_id = f"signal_{token_address[:8]}_{int(datetime.utcnow().timestamp())}"
+                    
                     features = self.feature_builder.build(
                         token_address=token_address,
                         agent_1_data=signals.get('agent_1'),
@@ -506,12 +509,12 @@ class Agent5SignalAggregator:
                         agent_3_data=signals.get('agent_3'),
                         agent_4_data=signals.get('agent_4'),
                         dex_data=signals.get('token_data'),
-                        pumpfun_data=signals.get('pumpfun_data')
+                        pumpfun_data=signals.get('pumpfun_data'),
+                        trade_id=trade_id
                     )
                     pump_prob = self.pump_predictor.predict(features)
                     
                     # Save features for training (Async)
-                    trade_id = f"signal_{token_address[:8]}_{int(datetime.utcnow().timestamp())}"
                     await self.feature_builder.save(features, trade_id)
                     
                     # 65% rule-based, 35% ML blend

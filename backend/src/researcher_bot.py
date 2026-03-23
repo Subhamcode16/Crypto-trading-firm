@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 from src.apis.dexscreener_client import DexscreenerClient
@@ -72,7 +73,7 @@ class ResearcherBot:
         self.market_regime = 'mixed'
         
         # WebSocket Client for UI signaling
-        self.ws_url = "ws://localhost:8080"
+        self.ws_url = os.getenv("WS_SERVER_URL", "ws://localhost:8080")
         
         logger.info('🔬 Researcher Bot initialized with Nine-Agent Firm capability')
     
@@ -330,7 +331,14 @@ class ResearcherBot:
             self.market_regime = self.detect_market_regime()
             scan_stats = {
                 'total_found': 0, 'total_processed': 0,
-                'agent_6_passed': 0, 'agent_7_passed': 0, 'agent_8_executed': 0
+                'agent_2_cleared': 0, 'agent_2_killed': 0,
+                'agent_5_cleared': 0, 'agent_5_killed': 0,
+                'agent_6_passed': 0, 'agent_6_held': 0,
+                'agent_7_passed': 0, 'agent_7_blocked': 0,
+                'agent_8_executed': 0, 'agent_8_rejected': 0,
+                'kill_reasons': [],
+                'cleared_tokens': [],
+                'executed_tokens': []
             }
             
             # ── DISCOVERY (Delegated to Agent 1) ─────────────────
@@ -356,7 +364,19 @@ class ResearcherBot:
 
                 # Run Intelligence Div gates (Agent 2 -> 3 -> 4 -> 5)
                 intel_results = await self.process_with_agents_2_3_4_5([candidate])
-                cleared_signals.extend(intel_results.get('agent_5_cleared', []))
+                
+                # Track per-agent stats from intelligence division
+                a2_killed_count = len(intel_results.get('agent_2_killed', []))
+                a5_cleared_list = intel_results.get('agent_5_cleared', [])
+                a5_killed_count = len(intel_results.get('agent_5_killed', []))
+                a2_cleared_count = len(a5_cleared_list) + a5_killed_count  # survived Agent 2
+                
+                scan_stats['agent_2_cleared'] += a2_cleared_count
+                scan_stats['agent_2_killed'] += a2_killed_count
+                scan_stats['agent_5_cleared'] += len(a5_cleared_list)
+                scan_stats['agent_5_killed'] += a5_killed_count
+                
+                cleared_signals.extend(a5_cleared_list)
 
             # ── COMMAND DIVISION (Agents 6-7) ────────────────────
             for signal in cleared_signals:
@@ -412,6 +432,8 @@ class ResearcherBot:
                     await self._send_agent_event(6, "HOLD_SIGNAL", {"reason": agent_6_result.get('failure_reason')})
                     logger.warning(f"   [MACRO] KILLED: {token_symbol} | {agent_6_result.get('failure_reason')}")
                     self.signals_dropped_today += 1
+                    scan_stats['agent_6_held'] = scan_stats.get('agent_6_held', 0) + 1
+                    scan_stats['kill_reasons'].append(f"{token_symbol}: Macro Hold - {agent_6_result.get('failure_reason', 'unknown')}")
                     await self._send_pipeline_update()
                     return
                 await self._send_agent_event(6, "CLEAR")
@@ -463,6 +485,8 @@ class ResearcherBot:
                     await self._send_agent_event(7, "HOLD_SIGNAL", {"reason": risk_reason})
                     logger.warning(f'   [RISK] KILLED: {token_symbol} | {risk_reason}')
                     self.signals_dropped_today += 1
+                    scan_stats['agent_7_blocked'] = scan_stats.get('agent_7_blocked', 0) + 1
+                    scan_stats['kill_reasons'].append(f"{token_symbol}: Risk Block - {risk_reason}")
                     await self._send_pipeline_update()
                     return
                 
@@ -483,9 +507,19 @@ class ResearcherBot:
                             
                         if exec_result.get('status') == 'FILLED':
                             scan_stats['agent_8_executed'] = scan_stats.get('agent_8_executed', 0) + 1
+                            scan_stats['executed_tokens'].append({
+                                'symbol': token_symbol,
+                                'price': exec_result.get('fill_price', entry_price),
+                                'size_usd': instruction.position_size_usd,
+                                'sl_pct': instruction.stop_loss_pct,
+                                'tp1_mult': instruction.take_profit_1_pct,
+                                'tp2_mult': instruction.take_profit_2_pct,
+                                'rationale': instruction.sl_tp_rationale or 'Standard entry'
+                            })
                             await self._send_agent_event(8, "POSITION_OPEN", {"price": exec_result.get('fill_price')})
                             logger.info(f"   💸 [FILLED] Pos ID: {exec_result.get('position_id')} @ ${exec_result.get('fill_price')}")
                         else:
+                            scan_stats['agent_8_rejected'] = scan_stats.get('agent_8_rejected', 0) + 1
                             await self._send_agent_event(8, "STANDBY", {"reason": exec_result.get('reason')})
                             logger.warning(f"   ❌ [EXECUTION REJECTED] {exec_result.get('reason')}")
                     except Exception as e:

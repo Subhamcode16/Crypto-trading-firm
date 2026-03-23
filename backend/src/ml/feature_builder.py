@@ -40,6 +40,7 @@ class FeatureBuilder:
         agent_4_data: Optional[Dict] = None,
         dex_data: Optional[Dict] = None,
         pumpfun_data: Optional[Dict] = None,
+        trade_id: Optional[str] = None,
     ) -> Dict:
         """
         Build a complete flat feature vector from all agent outputs.
@@ -148,12 +149,16 @@ class FeatureBuilder:
         features['_token_address']   = token_address
         features['_timestamp']       = datetime.utcnow().isoformat()
         features['_feature_version'] = self.FEATURE_VERSION
+        if trade_id:
+            features['_trade_id'] = trade_id
 
         return features
 
-    async def save(self, features: Dict, trade_id: str, data_dir: str = 'src/ml/data'):
+    async def save(self, features: Dict, trade_id: str, data_dir: str = None):
         """Save a feature vector to disk for future training."""
         import asyncio
+        if data_dir is None:
+            data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(data_dir, exist_ok=True)
         filepath = os.path.join(data_dir, f"features_{trade_id}.json")
         

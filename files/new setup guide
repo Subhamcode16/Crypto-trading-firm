@@ -1,0 +1,101 @@
+# Docker Deployment — Walkthrough
+
+## What Was Done
+
+Dockerized the full 4-service trading bot stack for 24/7 VPS deployment with auto-restart, persistent ML volumes, and runtime secret injection.
+
+## Files Created
+
+| File | Purpose |
+|---|---|
+| [docker-compose.yml](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/docker-compose.yml) | Orchestrates all 4 services |
+| [backend/Dockerfile](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/Dockerfile) | Python 3.13-slim + xgboost/numpy system deps |
+| [server/Dockerfile](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/server/Dockerfile) | Node 20 alpine, ws+express |
+| [frontend/Dockerfile](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/frontend/Dockerfile) | Multi-stage: Vite build → nginx serve |
+| [frontend/nginx.conf](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/frontend/nginx.conf) | SPA + reverse proxy for `/api/` and `/ws` |
+| [docker.env.template](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/docker.env.template) | All required env vars template |
+| [frontend/src/config.js](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/frontend/src/config.js) | Centralized API/WS URL config |
+
+## Files Modified
+
+| File | Change |
+|---|---|
+| [requirements.txt](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/requirements.txt) | Added 10 missing packages |
+| [researcher_bot.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/researcher_bot.py) | `WS_SERVER_URL` env var |
+| [agent_1_discovery.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_1_discovery.py) | `WS_SERVER_URL` env var |
+| [server.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/server.py) | `CORS_ORIGINS` env var |
+| [App.jsx](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/frontend/src/App.jsx) | Uses `config.WS_URL` |
+| 3 frontend stores | Use `VITE_API_URL` env var |
+| [.gitignore](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/.gitignore) | Added [secrets.env](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/secrets.env) |
+
+## Architecture
+
+```mermaid
+graph TD
+    subgraph "Docker Compose Stack"
+        BOT["bot<br/>python src/main.py<br/>24/7 autonomous trading"]
+        API["api<br/>uvicorn :8000<br/>Admin REST API"]
+        WS["websocket<br/>node :8080<br/>Real-time event bridge"]
+        FE["frontend<br/>nginx :5173<br/>React dashboard"]
+    end
+
+    BOT -->|"ws://websocket:8080"| WS
+    FE -->|"/api/ proxy"| API
+    FE -->|"/ws proxy"| WS
+    BOT --- VOL["ml-data volume<br/>ml-models volume"]
+    
+    USER["Browser"] -->|":5173"| FE
+    ENVF[".env file"] -.->|"env_file"| BOT
+    ENVF -.->|"env_file"| API
+```
+
+## VPS Deployment Steps
+
+```bash
+# 1. Clone repo on VPS
+git clone <your-repo-url> && cd Crypto-trading-bot
+
+# 2. Create .env from template and fill in API keys
+cp docker.env.template .env
+nano .env   # Fill in TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, etc.
+
+# 3. Build all images
+docker compose build
+
+# 4. Start everything (detached)
+docker compose up -d
+
+# 5. Verify all services are running
+docker compose ps
+
+# 6. Watch bot logs
+docker compose logs -f bot
+
+# 7. Open dashboard
+# http://<VPS_IP>:5173
+```
+
+## Key Operational Commands
+
+```bash
+# Restart a single service
+docker compose restart bot
+
+# View logs with timestamps
+docker compose logs -f --timestamps bot api
+
+# Stop everything
+docker compose down
+
+# Rebuild after code changes
+docker compose build && docker compose up -d
+
+# Check which ML data files are being saved
+docker compose exec bot ls -la src/ml/data/
+```
+
+## Validation Result
+
+```
+docker compose config → Exit code 0 (valid)
+```

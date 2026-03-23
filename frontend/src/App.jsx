@@ -9,11 +9,12 @@ import { useAgentStore } from './stores/useAgentStore';
 import { StatsDashboard } from './pages/StatsDashboard';
 import { routeEvent } from './logic/EventAdapter';
 import { InboxDrawer } from './components/panels/InboxDrawer';
+import { config } from './config';
 
 // Extracted from original App.jsx
 function OfficeView() {
   const [selectedId, setSelectedId] = useState(null);
-  const { send } = useWebSocket('ws://localhost:8080');
+  const { send } = useWebSocket(config.WS_URL);
   const agents = useAgentStore((state) => state.agents);
   const selectedAgent = selectedId ? agents[selectedId] : null;
 

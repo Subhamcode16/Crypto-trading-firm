@@ -14,9 +14,13 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Crypto Bot Admin API")
 
 # Add CORS middleware
+cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:5173"
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://chief-ai-autonomous-agent.onrender.com"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

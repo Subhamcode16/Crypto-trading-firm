@@ -1,0 +1,10 @@
+[PASS] _trade_id embedded in features
+[PASS] Feature file saved to ml/data/
+[PASS] Outcome file saved to ml/data/
+[PASS] Trainer matched features to outcomes
+[PASS] Label is correct (pump=1 for 75%)
+[PASS] collect_outcomes_from_disk finds files
+[PASS] retrain_from_disk correctly skips (need 30+)
+[PASS] Test files cleaned up
+
+Total: 8/8 passed

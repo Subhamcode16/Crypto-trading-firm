@@ -36,10 +36,11 @@ class Agent0Commander:
         self.db = db_client
         self.telegram = telegram_client   # Injected after init to avoid circular imports
         self.llm = LLMClient()
-        self.model_type = "haiku-strategic" # Upgraded to Claude 3.5 Haiku for stability
         self.haiku_type = "haiku"
+        self.sonnet_type = "sonnet"
+        self.model_type = "haiku-strategic"
 
-        logger.info("[AGENT_0] Commander initialized. Strategic intelligence set to Claude 3.5 Haiku.")
+        logger.info("[AGENT_0] Commander initialized. Strategic intelligence set to Claude 3.5 Sonnet.")
 
     # ─────────────────────────────────────────────────────────────────
     # PUBLIC: NATURAL LANGUAGE COMMAND PROCESSOR (Telegram entry point)
@@ -96,14 +97,41 @@ class Agent0Commander:
         )
         
         # Get history from Convex
-        history = await self.db.get_chat_history(user_id)
-        messages = []
-        for h in history:
-            messages.append({"role": h["role"], "content": h["content"]})
+        raw_history = await self.db.get_chat_history(user_id)
         
-        # Add current message to history (Convex side handles limiting to 20)
+        # Add current message
         await self.db.append_chat_history(user_id, "user", text)
-        messages.append({"role": "user", "content": text})
+        
+        # Build messages list with STRICT alternation (Anthropic requirement)
+        # and ensure it starts with 'user'
+        messages = []
+        last_role = None
+        
+        for h in raw_history:
+            role = h["role"]
+            content = h["content"]
+            
+            if role == last_role:
+                # Merge consecutive messages of same role
+                if messages:
+                    messages[-1]["content"] += "\n" + content
+            else:
+                messages.append({"role": role, "content": content})
+                last_role = role
+
+        # Ensure the first message is always 'user' (Anthropic Requirement)
+        while messages and messages[0]["role"] != "user":
+            messages.pop(0)
+
+        if not messages:
+            messages.append({"role": "user", "content": text})
+
+        # Debug logging to file
+        with open("commander_debug.log", "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.utcnow().isoformat()} ---\n")
+            f.write(f"USER_ID: {user_id}\n")
+            f.write(f"PROMPT: {system_prompt[:100]}...\n")
+            f.write(f"MESSAGES: {json.dumps(messages, indent=2)}\n")
 
         try:
             resp = await self.llm.create_message(
@@ -113,6 +141,14 @@ class Agent0Commander:
                 max_tokens=600,
                 temperature=0.7
             )
+            
+            # Check for LLM error before processing text
+            if resp.get('error'):
+                logger.error(f"[AGENT_0] LLM error in professional response: {resp.get('error')}")
+                return (
+                    f"💼 <b>{bot_name}:</b> Strategic desk is temporarily offline, {user_name}. "
+                    f"Our AI systems are being recalibrated. Try again in a moment."
+                )
             
             content = resp.get('text', '').strip()
             if not content:
@@ -124,7 +160,7 @@ class Agent0Commander:
             
         except Exception as e:
             logger.error(f"[AGENT_0] Professional response failed: {e}")
-            return f"💼 <b>{bot_name}:</b> Strategic desk connection unstable."
+            return f"💼 <b>{bot_name}:</b> Strategic desk connection unstable. Stand by, {user_name}."
 
     # ─────────────────────────────────────────────────────────────────
     # STEP 1: NLP — Parse User Intent with Haiku

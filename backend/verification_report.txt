@@ -1,0 +1,15 @@
+DEEP VERIFICATION REPORT
+==============================
+Import Success: 62
+Import Failures: 0
+Runtime Init Failures: 8
+
+Failures Details:
+ - src.cost_tracker.CostTracker: CostTracker.__init__() got an unexpected keyword argument 'config'
+ - src.researcher_bot.ResearcherBot: ResearcherBot.__init__() got an unexpected keyword argument 'config'
+ - src.risk_manager.RiskManager: RiskManager.__init__() got an unexpected keyword argument 'config'
+ - src.telegram_bot.TelegramBot: TelegramBot.__init__() got an unexpected keyword argument 'config'
+ - src.agents.agent_0_commander.Agent0Commander: Agent0Commander.__init__() got an unexpected keyword argument 'config'
+ - src.agents.agent_6_macro_sentinel.Agent6MacroSentinel: ANTHROPIC_API_KEY required
+ - src.agents.agent_9_performance_analyst.PerformanceAnalyst: PerformanceAnalyst.__init__() got an unexpected keyword argument 'config'
+ - src.apis.helius_webhook.HeliusWebhookManager: HeliusWebhookManager.__init__() got an unexpected keyword argument 'config'

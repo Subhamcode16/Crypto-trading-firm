@@ -14,7 +14,7 @@ export const useSystemStore = create((set, get) => ({
         const endpoint = nextState ? '/api/system/pause' : '/api/system/resume';
         
         try {
-            const response = await fetch(`http://localhost:8000${endpoint}`, {
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${endpoint}`, {
                 method: 'POST',
                 headers: {
                     'X-Admin-Key': 'dev-admin-key' // In prod, this would be from env/auth
@@ -52,7 +52,7 @@ export const useSystemStore = create((set, get) => ({
     
     syncStatus: async () => {
         try {
-            const response = await fetch('http://localhost:8000/api/system/status');
+            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/system/status`);
             const data = await response.json();
             if (data.status === 'success') {
                 set({ isPaused: data.is_paused });

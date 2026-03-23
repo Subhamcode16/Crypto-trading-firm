@@ -1,0 +1,3556 @@
+# XGBoost Activation — Phase 1 Walkthrough
+
+## What Was Done
+
+Closed 4 critical gaps in the ML data pipeline that were preventing XGBoost from ever training. The pump prediction model was 100% dormant despite being wired into Agent 5's scoring logic.
+
+## Root Causes Found
+
+| Gap | Impact |
+|---|---|
+| `feature_builder.save()` used relative path `src/ml/data` | Features never saved to disk — resolves wrong depending on working directory |
+| `MLTrainer.save_outcome()` never called | No trade outcomes recorded → trainer can't label training data |
+| No retraining job in scheduler | Even with data, model would never retrain |
+| `_trade_id` missing from feature vectors | Trainer couldn't match features to outcomes |
+
+## Files Changed
+
+### [feature_builder.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/ml/feature_builder.py)
+- `build()` now accepts `trade_id` parameter, embeds as `_trade_id` in feature dict
+- `save()` now defaults to absolute path (`os.path.dirname(__file__)/data`) instead of relative `src/ml/data`
+
+```diff:feature_builder.py
+#!/usr/bin/env python3
+"""
+ML Feature Builder — Aggregates real signals from all agents into a flat feature vector.
+This is the bridge between the 9-agent pipeline and the XGBoost ML model.
+
+Runs INSIDE Agent 5 (Signal Aggregator) right before calling pump_predictor.predict().
+Saves feature vectors to disk alongside trade entries for future training.
+"""
+
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Dict, Optional
+
+logger = logging.getLogger('feature_builder')
+
+
+class FeatureBuilder:
+    """
+    Converts raw agent output signals into a normalized ML feature vector.
+
+    Feature categories:
+    - Social signals (Agent 1: Reddit, X, RSS)
+    - Safety signals (Agent 2: on-chain filters)
+    - Smart money signals (Agent 3: wallet tracker)
+    - Narrative signals (Agent 4: intel agent)
+    - DEX/on-chain raw metrics
+    - pump.fun launch signals
+    """
+
+    FEATURE_VERSION = "1.0"
+
+    def build(
+        self,
+        token_address: str,
+        agent_1_data: Optional[Dict] = None,
+        agent_2_data: Optional[Dict] = None,
+        agent_3_data: Optional[Dict] = None,
+        agent_4_data: Optional[Dict] = None,
+        dex_data: Optional[Dict] = None,
+        pumpfun_data: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        Build a complete flat feature vector from all agent outputs.
+
+        Args:
+            token_address: Solana token address (for logging)
+            agent_1_data: Discovery data (scores, source, reddit/X metrics)
+            agent_2_data: Safety analysis result (9 filters)
+            agent_3_data: Wallet tracker result (smart wallets, insider)
+            agent_4_data: Intel agent result (narrative, influencers)
+            dex_data:     Raw DexScreener pair data
+            pumpfun_data: pump.fun token data (if applicable)
+
+        Returns:
+            Flat dict of floats (feature_vector)
+        """
+        features = {}
+
+        # ── AGENT 1: Discovery & Social Signals ──────────────────────────
+        a1 = agent_1_data or {}
+        raw_a1 = a1.get('raw', {})
+        features['source_pumpfun']   = 1.0 if a1.get('source') == 'pumpfun' else 0.0
+        features['source_dexscreener']= 1.0 if a1.get('source') == 'dexscreener' else 0.0
+        features['source_reddit']    = 1.0 if a1.get('source') == 'reddit_post' else 0.0
+        features['source_coingecko'] = 1.0 if a1.get('source') == 'coingecko' else 0.0
+        features['source_twitter']   = 1.0 if a1.get('source') == 'twitter_search' else 0.0
+        features['source_rss']       = 1.0 if a1.get('source') == 'rss_news' else 0.0
+        features['agent1_score']     = float(a1.get('score', 5.0))
+
+        # Reddit-specific metrics (if source is reddit)
+        features['reddit_mention_count']    = float(raw_a1.get('mention_count', 0))
+        features['reddit_upvote_velocity']  = float(raw_a1.get('upvote_velocity', 0))
+        features['reddit_comment_velocity'] = float(raw_a1.get('comment_velocity', 0))
+
+        # ── AGENT 2: On-Chain Safety Signals ─────────────────────────────
+        a2 = agent_2_data or {}
+        features['safety_score']              = float(a2.get('score', 0))
+        features['safety_cleared']            = 1.0 if a2.get('status') == 'CLEARED' else 0.0
+        features['lp_locked']                 = float(a2.get('filters', {}).get('lp_locked', {}).get('passed', 0))
+        features['mint_authority_disabled']   = float(a2.get('filters', {}).get('mint_authority', {}).get('passed', 0))
+        features['top_holder_pct_safe']       = float(a2.get('filters', {}).get('holder_concentration', {}).get('passed', 0))
+        features['rugcheck_passed']           = float(a2.get('filters', {}).get('rugcheck', {}).get('passed', 0))
+        features['liquidity_usd_safe']        = float(a2.get('filters', {}).get('liquidity_check', {}).get('passed', 0))
+
+        # ── AGENT 3: Smart Money / Wallet Signals ─────────────────────────
+        a3 = agent_3_data or {}
+        features['smart_wallet_count']      = float(len(a3.get('smart_wallets_detected', [])))
+        features['is_priority_signal']      = 1.0 if a3.get('is_priority') else 0.0
+        features['insider_action_holding']  = 1.0 if a3.get('insider_status', {}).get('deployer_action') in ['holding', 'accumulating'] else 0.0
+        features['copy_trade_detected']     = 1.0 if a3.get('copy_trade_signal', {}).get('detected') else 0.0
+        features['copy_trade_win_rate']     = float(a3.get('copy_trade_signal', {}).get('historical_success_rate', 0))
+        features['agent3_score']            = float(a3.get('score', 0))
+
+        # ── AGENT 4: Narrative / Intel Signals ────────────────────────────
+        a4 = agent_4_data or {}
+        features['narrative_bonus_awarded'] = 1.0 if a4.get('narrative_bonus_awarded') else 0.0
+        features['influencer_mentions']     = float(a4.get('influencer_mentions', 0))
+        features['narrative_theme_count']   = float(len(a4.get('narrative_themes', {})))
+        features['agent4_score']            = float(a4.get('score', 0))
+
+        # ── DEX (DexScreener) Raw Metrics ────────────────────────────────
+        dex = dex_data or {}
+        pair_data = dex.get('info', dex)
+        features['liquidity_usd']           = float(pair_data.get('liquidity', {}).get('usd', 0) if isinstance(pair_data.get('liquidity'), dict) else 0)
+        features['volume_h24']              = float(pair_data.get('volume', {}).get('h24', 0) if isinstance(pair_data.get('volume'), dict) else 0)
+        features['volume_h1']               = float(pair_data.get('volume', {}).get('h1', 0) if isinstance(pair_data.get('volume'), dict) else 0)
+        features['price_change_h1']         = float(pair_data.get('priceChange', {}).get('h1', 0) if isinstance(pair_data.get('priceChange'), dict) else 0)
+        features['price_change_h24']        = float(pair_data.get('priceChange', {}).get('h24', 0) if isinstance(pair_data.get('priceChange'), dict) else 0)
+        features['txns_h1_buys']            = float(pair_data.get('txns', {}).get('h1', {}).get('buys', 0) if isinstance(pair_data.get('txns'), dict) else 0)
+
+        # ── pump.fun Launch Signals ────────────────────────────────────────
+        pf = pumpfun_data or {}
+        features['pumpfun_bonding_curve_pct']  = float(pf.get('bonding_curve_pct', 0))
+        features['pumpfun_reply_count']        = float(pf.get('reply_count', 0))
+        features['pumpfun_has_twitter']        = 1.0 if pf.get('twitter') else 0.0
+        features['pumpfun_has_telegram']       = 1.0 if pf.get('telegram') else 0.0
+        features['pumpfun_graduated']          = 1.0 if pf.get('complete') else 0.0
+
+        # ── Derived Composite Signals (from PDF formula) ──────────────────
+        social_score = min(1.0, (
+            features['reddit_mention_count'] * 0.4 +
+            features['reddit_upvote_velocity'] * 0.3 +
+            features['reddit_comment_velocity'] * 0.3
+        ) / 10)
+
+        liquidity_score = min(1.0, features['liquidity_usd'] / 100_000)
+
+        smart_money_score = min(1.0, (
+            features['smart_wallet_count'] * 0.3 +
+            features['copy_trade_win_rate'] * 0.4 +
+            features['is_priority_signal'] * 0.3
+        ))
+
+        features['social_score']       = social_score
+        features['liquidity_score']    = liquidity_score
+        features['smart_money_score']  = smart_money_score
+
+        # Master signal score from PDF: social*0.3 + liquidity*0.4 + smart*0.3
+        features['pdf_signal_score'] = (
+            social_score * 0.3 +
+            liquidity_score * 0.4 +
+            smart_money_score * 0.3
+        )
+
+        # ── Metadata (not used in model, for logging only) ─────────────────
+        features['_token_address']   = token_address
+        features['_timestamp']       = datetime.utcnow().isoformat()
+        features['_feature_version'] = self.FEATURE_VERSION
+
+        return features
+
+    async def save(self, features: Dict, trade_id: str, data_dir: str = 'src/ml/data'):
+        """Save a feature vector to disk for future training."""
+        import asyncio
+        os.makedirs(data_dir, exist_ok=True)
+        filepath = os.path.join(data_dir, f"features_{trade_id}.json")
+        
+        def _save_sync():
+            with open(filepath, 'w') as f:
+                json.dump(features, f, indent=2)
+        
+        try:
+            await asyncio.to_thread(_save_sync)
+            logger.info(f"[ML] Feature vector saved: {filepath}")
+        except Exception as e:
+            logger.error(f"[ML] Failed to save features: {e}")
+
+    def get_model_input(self, features: Dict) -> list:
+        """Extract only numeric features (excludes _metadata keys) as ordered list."""
+        return [v for k, v in features.items() if not k.startswith('_')]
+
+    def get_feature_names(self, features: Dict) -> list:
+        """Return feature names in the same order as get_model_input()."""
+        return [k for k in features.keys() if not k.startswith('_')]
+===
+#!/usr/bin/env python3
+"""
+ML Feature Builder — Aggregates real signals from all agents into a flat feature vector.
+This is the bridge between the 9-agent pipeline and the XGBoost ML model.
+
+Runs INSIDE Agent 5 (Signal Aggregator) right before calling pump_predictor.predict().
+Saves feature vectors to disk alongside trade entries for future training.
+"""
+
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Dict, Optional
+
+logger = logging.getLogger('feature_builder')
+
+
+class FeatureBuilder:
+    """
+    Converts raw agent output signals into a normalized ML feature vector.
+
+    Feature categories:
+    - Social signals (Agent 1: Reddit, X, RSS)
+    - Safety signals (Agent 2: on-chain filters)
+    - Smart money signals (Agent 3: wallet tracker)
+    - Narrative signals (Agent 4: intel agent)
+    - DEX/on-chain raw metrics
+    - pump.fun launch signals
+    """
+
+    FEATURE_VERSION = "1.0"
+
+    def build(
+        self,
+        token_address: str,
+        agent_1_data: Optional[Dict] = None,
+        agent_2_data: Optional[Dict] = None,
+        agent_3_data: Optional[Dict] = None,
+        agent_4_data: Optional[Dict] = None,
+        dex_data: Optional[Dict] = None,
+        pumpfun_data: Optional[Dict] = None,
+        trade_id: Optional[str] = None,
+    ) -> Dict:
+        """
+        Build a complete flat feature vector from all agent outputs.
+
+        Args:
+            token_address: Solana token address (for logging)
+            agent_1_data: Discovery data (scores, source, reddit/X metrics)
+            agent_2_data: Safety analysis result (9 filters)
+            agent_3_data: Wallet tracker result (smart wallets, insider)
+            agent_4_data: Intel agent result (narrative, influencers)
+            dex_data:     Raw DexScreener pair data
+            pumpfun_data: pump.fun token data (if applicable)
+
+        Returns:
+            Flat dict of floats (feature_vector)
+        """
+        features = {}
+
+        # ── AGENT 1: Discovery & Social Signals ──────────────────────────
+        a1 = agent_1_data or {}
+        raw_a1 = a1.get('raw', {})
+        features['source_pumpfun']   = 1.0 if a1.get('source') == 'pumpfun' else 0.0
+        features['source_dexscreener']= 1.0 if a1.get('source') == 'dexscreener' else 0.0
+        features['source_reddit']    = 1.0 if a1.get('source') == 'reddit_post' else 0.0
+        features['source_coingecko'] = 1.0 if a1.get('source') == 'coingecko' else 0.0
+        features['source_twitter']   = 1.0 if a1.get('source') == 'twitter_search' else 0.0
+        features['source_rss']       = 1.0 if a1.get('source') == 'rss_news' else 0.0
+        features['agent1_score']     = float(a1.get('score', 5.0))
+
+        # Reddit-specific metrics (if source is reddit)
+        features['reddit_mention_count']    = float(raw_a1.get('mention_count', 0))
+        features['reddit_upvote_velocity']  = float(raw_a1.get('upvote_velocity', 0))
+        features['reddit_comment_velocity'] = float(raw_a1.get('comment_velocity', 0))
+
+        # ── AGENT 2: On-Chain Safety Signals ─────────────────────────────
+        a2 = agent_2_data or {}
+        features['safety_score']              = float(a2.get('score', 0))
+        features['safety_cleared']            = 1.0 if a2.get('status') == 'CLEARED' else 0.0
+        features['lp_locked']                 = float(a2.get('filters', {}).get('lp_locked', {}).get('passed', 0))
+        features['mint_authority_disabled']   = float(a2.get('filters', {}).get('mint_authority', {}).get('passed', 0))
+        features['top_holder_pct_safe']       = float(a2.get('filters', {}).get('holder_concentration', {}).get('passed', 0))
+        features['rugcheck_passed']           = float(a2.get('filters', {}).get('rugcheck', {}).get('passed', 0))
+        features['liquidity_usd_safe']        = float(a2.get('filters', {}).get('liquidity_check', {}).get('passed', 0))
+
+        # ── AGENT 3: Smart Money / Wallet Signals ─────────────────────────
+        a3 = agent_3_data or {}
+        features['smart_wallet_count']      = float(len(a3.get('smart_wallets_detected', [])))
+        features['is_priority_signal']      = 1.0 if a3.get('is_priority') else 0.0
+        features['insider_action_holding']  = 1.0 if a3.get('insider_status', {}).get('deployer_action') in ['holding', 'accumulating'] else 0.0
+        features['copy_trade_detected']     = 1.0 if a3.get('copy_trade_signal', {}).get('detected') else 0.0
+        features['copy_trade_win_rate']     = float(a3.get('copy_trade_signal', {}).get('historical_success_rate', 0))
+        features['agent3_score']            = float(a3.get('score', 0))
+
+        # ── AGENT 4: Narrative / Intel Signals ────────────────────────────
+        a4 = agent_4_data or {}
+        features['narrative_bonus_awarded'] = 1.0 if a4.get('narrative_bonus_awarded') else 0.0
+        features['influencer_mentions']     = float(a4.get('influencer_mentions', 0))
+        features['narrative_theme_count']   = float(len(a4.get('narrative_themes', {})))
+        features['agent4_score']            = float(a4.get('score', 0))
+
+        # ── DEX (DexScreener) Raw Metrics ────────────────────────────────
+        dex = dex_data or {}
+        pair_data = dex.get('info', dex)
+        features['liquidity_usd']           = float(pair_data.get('liquidity', {}).get('usd', 0) if isinstance(pair_data.get('liquidity'), dict) else 0)
+        features['volume_h24']              = float(pair_data.get('volume', {}).get('h24', 0) if isinstance(pair_data.get('volume'), dict) else 0)
+        features['volume_h1']               = float(pair_data.get('volume', {}).get('h1', 0) if isinstance(pair_data.get('volume'), dict) else 0)
+        features['price_change_h1']         = float(pair_data.get('priceChange', {}).get('h1', 0) if isinstance(pair_data.get('priceChange'), dict) else 0)
+        features['price_change_h24']        = float(pair_data.get('priceChange', {}).get('h24', 0) if isinstance(pair_data.get('priceChange'), dict) else 0)
+        features['txns_h1_buys']            = float(pair_data.get('txns', {}).get('h1', {}).get('buys', 0) if isinstance(pair_data.get('txns'), dict) else 0)
+
+        # ── pump.fun Launch Signals ────────────────────────────────────────
+        pf = pumpfun_data or {}
+        features['pumpfun_bonding_curve_pct']  = float(pf.get('bonding_curve_pct', 0))
+        features['pumpfun_reply_count']        = float(pf.get('reply_count', 0))
+        features['pumpfun_has_twitter']        = 1.0 if pf.get('twitter') else 0.0
+        features['pumpfun_has_telegram']       = 1.0 if pf.get('telegram') else 0.0
+        features['pumpfun_graduated']          = 1.0 if pf.get('complete') else 0.0
+
+        # ── Derived Composite Signals (from PDF formula) ──────────────────
+        social_score = min(1.0, (
+            features['reddit_mention_count'] * 0.4 +
+            features['reddit_upvote_velocity'] * 0.3 +
+            features['reddit_comment_velocity'] * 0.3
+        ) / 10)
+
+        liquidity_score = min(1.0, features['liquidity_usd'] / 100_000)
+
+        smart_money_score = min(1.0, (
+            features['smart_wallet_count'] * 0.3 +
+            features['copy_trade_win_rate'] * 0.4 +
+            features['is_priority_signal'] * 0.3
+        ))
+
+        features['social_score']       = social_score
+        features['liquidity_score']    = liquidity_score
+        features['smart_money_score']  = smart_money_score
+
+        # Master signal score from PDF: social*0.3 + liquidity*0.4 + smart*0.3
+        features['pdf_signal_score'] = (
+            social_score * 0.3 +
+            liquidity_score * 0.4 +
+            smart_money_score * 0.3
+        )
+
+        # ── Metadata (not used in model, for logging only) ─────────────────
+        features['_token_address']   = token_address
+        features['_timestamp']       = datetime.utcnow().isoformat()
+        features['_feature_version'] = self.FEATURE_VERSION
+        if trade_id:
+            features['_trade_id'] = trade_id
+
+        return features
+
+    async def save(self, features: Dict, trade_id: str, data_dir: str = None):
+        """Save a feature vector to disk for future training."""
+        import asyncio
+        if data_dir is None:
+            data_dir = os.path.join(os.path.dirname(__file__), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        filepath = os.path.join(data_dir, f"features_{trade_id}.json")
+        
+        def _save_sync():
+            with open(filepath, 'w') as f:
+                json.dump(features, f, indent=2)
+        
+        try:
+            await asyncio.to_thread(_save_sync)
+            logger.info(f"[ML] Feature vector saved: {filepath}")
+        except Exception as e:
+            logger.error(f"[ML] Failed to save features: {e}")
+
+    def get_model_input(self, features: Dict) -> list:
+        """Extract only numeric features (excludes _metadata keys) as ordered list."""
+        return [v for k, v in features.items() if not k.startswith('_')]
+
+    def get_feature_names(self, features: Dict) -> list:
+        """Return feature names in the same order as get_model_input()."""
+        return [k for k in features.keys() if not k.startswith('_')]
+```
+
+---
+
+### [agent_5_signal_aggregator.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_5_signal_aggregator.py)
+- `trade_id` now generated _before_ `build()` call and passed through, so it's embedded in the saved JSON
+
+```diff:agent_5_signal_aggregator.py
+#!/usr/bin/env python3
+"""
+AGENT 5: Signal Aggregator - Consensus & Confluence Validator
+Role: Cross-reference cleared signals from Agents 1-4, detect confluence, 
+       assign composite confidence score. Nothing reaches Command Division without passing here.
+"""
+
+import json
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+# Import Master Trading Rules Engine (INTEGRATION POINT 1)
+from src.rules.trading_rules_engine import TradingRulesEngine
+from src.ml.feature_builder import FeatureBuilder
+from src.ml.pump_predictor import PumpPredictor
+
+logger = logging.getLogger(__name__)
+
+class Agent5SignalAggregator:
+    """Consensus-based signal validation and scoring"""
+    
+    def __init__(self, config: Dict = None):
+        self.config = config or {}
+        logger.info("[AGENT_5] Signal Aggregator initialized")
+        
+        # Initialize Master Trading Rules Engine (INTEGRATION POINT 1)
+        try:
+            self.rules_engine = TradingRulesEngine(rules_path='config/trader_rules_master.json')
+            logger.info("[AGENT_5] ✅ Master Trading Rules Engine loaded (15 rules, 10 categories)")
+        except Exception as e:
+            logger.warning(f"[AGENT_5] ⚠️ Master Rules Engine failed to load: {e} (will continue without rules validation)")
+            self.rules_engine = None
+        
+        # ML scoring layer
+        try:
+            self.feature_builder = FeatureBuilder()
+            self.pump_predictor  = PumpPredictor()
+            logger.info(f"[AGENT_5] ✅ ML Pump Predictor loaded (mode: {self.pump_predictor.get_mode()})")
+        except Exception as e:
+            logger.warning(f"[AGENT_5] ⚠️ ML Predictor not available: {e}")
+            self.feature_builder = None
+            self.pump_predictor  = None
+        
+        # Scoring configuration - STATIC DEFAULTS (overridden by market regime)
+        self.weights_default = {
+            'agent_3': 0.40,  # Wallet Tracker (smartest money)
+            'agent_2': 0.25,  # Safety baseline
+            'agent_4': 0.20,  # Community Intel
+            'agent_1': 0.15   # Researcher discovery
+        }
+        
+        # Dynamic weighting by market regime (NEW - March 6, 2026)
+        self.weights_by_regime = {
+            'bullish': {
+                'agent_3': 0.35,  # Reduce wallet weighting (momentum matters more)
+                'agent_2': 0.20,  # Less strict on safety (risk acceptable)
+                'agent_4': 0.25,  # Boost community (FOMO driving)
+                'agent_1': 0.20   # Discovery more important (new money in)
+            },
+            'mixed': {  # DEFAULT (most conservative)
+                'agent_3': 0.40,  # Wallet Tracker most important
+                'agent_2': 0.25,  # Safety critical
+                'agent_4': 0.20,  # Community secondary
+                'agent_1': 0.15   # Discovery tertiary
+            },
+            'choppy': {
+                'agent_3': 0.50,  # PRIORITIZE smart money (only reliable signal)
+                'agent_2': 0.30,  # Strict safety (volatility = risk)
+                'agent_4': 0.10,  # Community noise is high
+                'agent_1': 0.10   # Discovery less relevant
+            },
+            'flat': {
+                'agent_3': 0.45,  # Still important (sideways = accumulation detection)
+                'agent_2': 0.25,  # Standard safety
+                'agent_4': 0.15,  # Community signals diluted
+                'agent_1': 0.15   # Discovery relevant
+            }
+        }
+        
+        # Use default initially (will be set based on market regime)
+        self.weights = self.weights_default.copy()
+        
+        # Confluence multipliers (based on number of independent confirmations)
+        self.confluence_multipliers = {
+            1: 1.0,   # Single source (previously capped at 6.0, now allows >9.0 outliers)
+            2: 1.2,   # Dual confirmation
+            3: 1.4,   # Triple confirmation
+            4: 1.6    # Quad confirmation
+        }
+        
+        # Time windows
+        self.optimal_window_min = 15  # minutes (token must be 15+ min old)
+        self.optimal_window_max = 45  # minutes (token must be 45- min old)
+        self.decay_interval = 15      # minutes (score decays -15% every 15 min)
+        self.decay_rate = 0.15        # 15% per interval
+        self.kill_age = 45            # minutes (signal killed if older than this)
+        self.velocity_window = 5      # minutes (for velocity bonus)
+        
+        # Pass threshold (reduced from 8.0 to 6.0 for higher volume)
+        self.min_pass_score = 6.0
+        
+        self.db = None
+    
+    # ============================================================
+    # MARKET REGIME & DYNAMIC WEIGHTING (NEW - March 6, 2026)
+    # ============================================================
+    
+    def detect_market_regime(self) -> str:
+        """
+        Detect current market regime and return regime name
+        
+        Returns: 'bullish' | 'mixed' | 'choppy' | 'flat'
+        
+        Could be enhanced with:
+        - Recent token success rate (bullish if >50% win rate)
+        - Volatility index (choppy if >20% daily swings)
+        - Volume trends (flat if volume declining)
+        """
+        # For now, read from config (would be enhanced with live data)
+        regime = self.config.get('market_regime', 'mixed').lower()
+        
+        if regime not in self.weights_by_regime:
+            regime = 'mixed'
+        
+        return regime
+    
+    def set_weights_for_regime(self, regime: str = None):
+        """
+        Dynamically set Agent 5 weights based on market regime
+        
+        Args:
+            regime: Market regime (bullish/mixed/choppy/flat)
+                    If None, detects automatically
+        """
+        if regime is None:
+            regime = self.detect_market_regime()
+        
+        if regime in self.weights_by_regime:
+            old_weights = self.weights.copy()
+            self.weights = self.weights_by_regime[regime].copy()
+            
+            logger.info(f"[AGENT_5] Market Regime: {regime.upper()}")
+            logger.info(f"[AGENT_5] Updated weights: A3={self.weights['agent_3']:.0%}, A2={self.weights['agent_2']:.0%}, A4={self.weights['agent_4']:.0%}, A1={self.weights['agent_1']:.0%}")
+        else:
+            logger.warning(f"[AGENT_5] Unknown regime '{regime}', using default")
+            self.weights = self.weights_default.copy()
+    
+    # ============================================================
+    # CONFLUENCE & INDEPENDENCE CHECKING
+    # ============================================================
+    
+    def detect_confluence(self, signals: Dict[str, Dict]) -> Tuple[int, List[str]]:
+        """
+        Detect how many independent sources confirmed this token
+        
+        Args:
+            signals: Dict with keys agent_1, agent_2, agent_3, agent_4
+                    Each has 'cleared' (bool) and other metadata
+        
+        Returns:
+            (source_count, independent_sources)
+        """
+        cleared_sources = []
+        
+        for agent_key in ['agent_1', 'agent_2', 'agent_3', 'agent_4']:
+            if signals.get(agent_key, {}).get('cleared'):
+                cleared_sources.append(agent_key)
+        
+        return len(cleared_sources), cleared_sources
+    
+    def check_independence(self, signals: Dict[str, Dict], cleared_sources: List[str]) -> Tuple[bool, float]:
+        """
+        Check if sources are truly independent or reacting to same public data
+        
+        Red flags for dependency:
+        - Agent 2 + Agent 3 analyzing same wallet data
+        - Agent 4 Discord + Agent 1 Telegram = same community
+        - Multiple agents referencing same trending pair
+        
+        Args:
+            signals: Full signal data from all agents
+            cleared_sources: List of agents that cleared the token
+        
+        Returns:
+            (is_independent, multiplier_reduction)
+        """
+        try:
+            if len(cleared_sources) <= 1:
+                # Single source is always "independent" (no dependency to detect)
+                return True, 1.0
+            
+            dependency_count = 0
+            
+            # Check Agent 2 + 3 dependency (both analyzing wallet data)
+            if 'agent_2' in cleared_sources and 'agent_3' in cleared_sources:
+                # If Agent 3 detected wallets BECAUSE of Agent 2 discovery, dependency
+                agent_2_discovery = signals.get('agent_2', {}).get('discovery_source')
+                agent_3_inputs = signals.get('agent_3', {}).get('data_sources', [])
+                
+                if agent_2_discovery in agent_3_inputs:
+                    dependency_count += 1
+                    logger.debug("[AGENT_5] Dependency: Agent 2 → Agent 3")
+            
+            # Check Agent 4 community + Agent 1 discovery (same community)
+            if 'agent_4' in cleared_sources and 'agent_1' in cleared_sources:
+                agent_4_discord = signals.get('agent_4', {}).get('community', {}).get('discord', {})
+                agent_1_source = signals.get('agent_1', {}).get('discovery_source')
+                
+                if agent_1_source == 'discord' and agent_4_discord.get('server_found'):
+                    dependency_count += 1
+                    logger.debug("[AGENT_5] Dependency: Agent 1 → Agent 4")
+            
+            # Calculate independence score
+            # Each dependency reduces confidence
+            # 0 dependencies = fully independent (no reduction)
+            # 1 dependency = 10% reduction
+            # 2 dependencies = 20% reduction
+            reduction = 1.0 - (dependency_count * 0.1)
+            reduction = max(0.8, reduction)  # Floor at 80% (not too harsh)
+            
+            is_independent = dependency_count == 0
+            
+            if not is_independent:
+                logger.info(f"[AGENT_5] Detected {dependency_count} dependencies - multiplier reduction: {reduction:.1%}")
+            
+            return is_independent, reduction
+            
+        except Exception as e:
+            logger.warning(f"[AGENT_5] Error checking independence: {e}")
+            return True, 1.0
+    
+    # ============================================================
+    # SCORING & TIME MODIFIERS
+    # ============================================================
+    
+    def calculate_base_score(self, signals: Dict[str, Dict], cleared_sources: List[str]) -> float:
+        """
+        Calculate base weighted score from cleared agents
+        
+        Args:
+            signals: Signal data from each agent
+            cleared_sources: Which agents cleared the token
+        
+        Returns:
+            Weighted score (0-10)
+        """
+        if not cleared_sources:
+            return 0.0
+        
+        total_score = 0.0
+        total_weight = 0.0
+        
+        for agent_key in cleared_sources:
+            agent_score = signals.get(agent_key, {}).get('score', 5.0)
+            weight = self.weights.get(agent_key, 0.0)
+            
+            total_score += agent_score * weight
+            total_weight += weight
+        
+        # Normalize by actual weights (not all agents may have cleared)
+        if total_weight > 0:
+            base_score = total_score / total_weight
+        else:
+            base_score = 0.0
+        
+        logger.debug(f"[AGENT_5] Base score: {base_score:.2f} (sources: {len(cleared_sources)})")
+        return base_score
+    
+    def apply_confluence_multiplier(self, base_score: float, source_count: int, 
+                                  independence: float) -> float:
+        """
+        Apply confluence multiplier based on number of independent sources
+        
+        Multipliers:
+        - 1 source: ×1.0 (now allows >9.0 if score is high enough)
+        - 2 sources: ×1.2
+        - 3 sources: ×1.4
+        - 4 sources: ×1.6
+        
+        Args:
+            base_score: Base weighted score
+            source_count: Number of cleared sources
+            independence: Independence reduction factor (0.8-1.0)
+        
+        Returns:
+            Multiplied score
+        """
+        multiplier = self.confluence_multipliers.get(source_count, 1.0)
+        
+        # Apply independence reduction to multiplier
+        multiplier *= independence
+        
+        # Apply cap for single-source signals
+        if source_count == 1:
+            multiplier = 1.0
+            # NEW: Allow single source if the base score is exceptional (> 9.0)
+            if base_score > 9.0:
+                logger.info(f"[AGENT_5] 🌟 Exceptional single source: {base_score:.2f} (allowed above 6.0 cap)")
+                return base_score
+            
+            capped_score = min(base_score, 6.0)  # Standard single source caps at 6/10
+            logger.debug(f"[AGENT_5] Single source: {base_score:.2f} → {capped_score:.2f} (standard cap 6.0)")
+            return capped_score
+        
+        # For multi-source, apply multiplier
+        result_score = base_score * multiplier
+        logger.debug(f"[AGENT_5] Confluence ×{multiplier:.2f}: {base_score:.2f} → {result_score:.2f}")
+        
+        return result_score
+    
+    def apply_velocity_bonus(self, current_score: float, signals: Dict[str, Dict],
+                            cleared_sources: List[str]) -> Tuple[float, bool]:
+        """
+        Velocity bonus: +0.5 if two confirmations arrive within 5 minutes of each other
+        
+        Args:
+            current_score: Score before velocity bonus
+            signals: Signal metadata with timestamps
+            cleared_sources: Which agents cleared
+        
+        Returns:
+            (score_with_bonus, bonus_applied)
+        """
+        if len(cleared_sources) < 2:
+            return current_score, False
+        
+        try:
+            timestamps = []
+            for agent_key in cleared_sources:
+                ts = signals.get(agent_key, {}).get('analysis_timestamp')
+                if ts:
+                    timestamps.append(datetime.fromisoformat(ts))
+            
+            if len(timestamps) < 2:
+                return current_score, False
+            
+            timestamps.sort()
+            time_diff = (timestamps[-1] - timestamps[0]).total_seconds() / 60
+            
+            if time_diff <= self.velocity_window:
+                bonus_score = current_score + 0.5
+                logger.info(f"[AGENT_5] Velocity bonus: +0.5 ({time_diff:.1f} min apart) → {bonus_score:.2f}")
+                return min(bonus_score, 10.0), True
+            
+            return current_score, False
+            
+        except Exception as e:
+            logger.warning(f"[AGENT_5] Velocity bonus error: {e}")
+            return current_score, False
+    
+    def apply_time_decay(self, current_score: float, token_age_minutes: float) -> float:
+        """
+        Time decay: Score drops 15% every 15 minutes unconfirmed
+        Signal killed at 45 minutes
+        
+        Args:
+            current_score: Score before decay
+            token_age_minutes: Age of token in minutes
+        
+        Returns:
+            Score after decay (or None if killed)
+        """
+        if token_age_minutes >= self.kill_age:
+            logger.warning(f"[AGENT_5] Signal KILLED: Token age {token_age_minutes:.1f}min (max {self.kill_age}min)")
+            return None
+        
+        intervals_elapsed = int(token_age_minutes / self.decay_interval)
+        decay_factor = (1 - self.decay_rate) ** intervals_elapsed
+        decayed_score = current_score * decay_factor
+        
+        if intervals_elapsed > 0:
+            logger.debug(f"[AGENT_5] Time decay: {current_score:.2f} × {decay_factor:.2f} = {decayed_score:.2f} ({intervals_elapsed}×{self.decay_rate:.0%})")
+        
+        return decayed_score
+    
+    def apply_age_penalty(self, current_score: float, token_age_minutes: float) -> float:
+        """
+        Age penalty: Token outside 15-45 minute optimal window gets explicit penalty
+        
+        Args:
+            current_score: Score before penalty
+            token_age_minutes: Age of token in minutes
+        
+        Returns:
+            Score after penalty
+        """
+        if self.optimal_window_min <= token_age_minutes <= self.optimal_window_max:
+            # Perfect window - no penalty
+            return current_score
+        
+        if token_age_minutes < self.optimal_window_min:
+            # Too young (< 15 min) - might be pump
+            penalty = 1.0  # 1 point penalty
+            penalized = current_score - penalty
+            logger.info(f"[AGENT_5] Age penalty (too young): -{penalty:.1f} → {penalized:.2f}")
+            return penalized
+        
+        if token_age_minutes > self.optimal_window_max:
+            # Too old (> 45 min) - should have killed by decay
+            penalty = 1.5  # 1.5 point penalty
+            penalized = current_score - penalty
+            logger.info(f"[AGENT_5] Age penalty (too old): -{penalty:.1f} → {penalized:.2f}")
+            return penalized
+        
+        return current_score
+    
+    # ============================================================
+    # AGGREGATION & FINAL DECISION
+    # ============================================================
+    
+    async def aggregate_signal(self, token_address: str, token_symbol: str,
+                        signals: Dict[str, Dict], discovered_at: str, market_regime: str = None) -> Optional[Dict]:
+        """
+        Aggregate all agent signals into single composite score and decision
+        
+        Args:
+            token_address: Token address
+            token_symbol: Token symbol
+            signals: Dict with agent_1, agent_2, agent_3, agent_4 results
+            discovered_at: ISO timestamp when token was discovered
+            market_regime: Optional market regime (bullish/mixed/choppy/flat)
+        
+        Returns:
+            Aggregated signal with composite score, or None if killed
+        """
+        logger.info(f"[AGENT_5] Aggregating signal for {token_symbol}")
+        
+        try:
+            # STEP 0: Set dynamic weights based on market regime
+            self.set_weights_for_regime(market_regime)
+
+            # STEP 0.1: Check for Agent 0 Commander Overrides in DB
+            if self.db:
+                try:
+                    # Check for min score override
+                    score_override = await self.db.get_system_state("agent_5_min_score")
+                    if score_override:
+                        self.min_pass_score = float(score_override)
+                        logger.info(f"[AGENT_5] 🎖️ COMMAND OVERRIDE: min_pass_score={self.min_pass_score}")
+
+                    # Check for weight overrides
+                    weights_override_json = await self.db.get_system_state("agent_weights_json")
+                    if weights_override_json:
+                        weights_override = json.loads(weights_override_json)
+                        self.weights.update(weights_override)
+                        logger.info(f"[AGENT_5] 🎖️ COMMAND OVERRIDE: weights={self.weights}")
+                except Exception as e:
+                    logger.error(f"[AGENT_5] Failed to apply Commander overrides: {e}")
+            
+            # Step 1: Detect confluence
+            source_count, cleared_sources = self.detect_confluence(signals)
+            
+            if source_count == 0:
+                logger.warning(f"[AGENT_5] No cleared sources - KILLED")
+                return None
+            
+            # Step 2: Check independence
+            is_independent, independence_factor = self.check_independence(signals, cleared_sources)
+            
+            # Step 3: Calculate base score
+            base_score = self.calculate_base_score(signals, cleared_sources)
+            
+            # Step 4: Apply confluence multiplier
+            score = self.apply_confluence_multiplier(base_score, source_count, independence_factor)
+            
+            # Step 5: Calculate token age and apply time decay
+            discovered_dt = datetime.fromisoformat(discovered_at)
+            token_age_min = (datetime.utcnow() - discovered_dt).total_seconds() / 60
+            
+            score = self.apply_time_decay(score, token_age_min)
+            if score is None:
+                return None  # Killed by time decay
+            
+            # Step 6: Apply age penalty
+            score = self.apply_age_penalty(score, token_age_min)
+            score = max(0, score)  # Floor at 0
+            
+            # Step 7: Apply velocity bonus
+            score, velocity_bonus = self.apply_velocity_bonus(score, signals, cleared_sources)
+            
+            # Step 7.1: Apply Narrative & Priority Bonuses (NEW - March 10, 2026)
+            is_priority = any(signals.get(a, {}).get('is_priority') for a in cleared_sources)
+            narrative_bonus = signals.get('agent_4', {}).get('narrative_bonus_awarded', False)
+            
+            if is_priority:
+                score += 1.5  # Heavy boost for priority smart money
+                logger.info(f"🚨 [AGENT_5] PRIORITY SIGNAL DETECTED: +1.5 Bonus → {score:.2f}")
+                
+            if narrative_bonus:
+                score += 0.5  # Bonus move if it aligns with underground narrative
+                logger.debug(f"✨ [AGENT_5] Narrative Alignment Bonus: +0.5 → {score:.2f}")
+
+            # Step 7.2: ML Pump Probability Layer
+            pump_prob = 0.5  # neutral default
+            if self.pump_predictor and self.feature_builder:
+                try:
+                    features = self.feature_builder.build(
+                        token_address=token_address,
+                        agent_1_data=signals.get('agent_1'),
+                        agent_2_data=signals.get('agent_2'),
+                        agent_3_data=signals.get('agent_3'),
+                        agent_4_data=signals.get('agent_4'),
+                        dex_data=signals.get('token_data'),
+                        pumpfun_data=signals.get('pumpfun_data')
+                    )
+                    pump_prob = self.pump_predictor.predict(features)
+                    
+                    # Save features for training (Async)
+                    trade_id = f"signal_{token_address[:8]}_{int(datetime.utcnow().timestamp())}"
+                    await self.feature_builder.save(features, trade_id)
+                    
+                    # 65% rule-based, 35% ML blend
+                    ml_boost = (pump_prob - 0.5) * 2.0    # scale to +/- 1.0
+                    score = (score * 0.65) + (ml_boost * 0.35)
+                    logger.info(f"🧠 [AGENT_5] ML pump_prob={pump_prob:.3f} → blended score={score:.2f}")
+                except Exception as e:
+                    logger.warning(f"[AGENT_5] ML inference failed: {e}")
+
+            # Step 8: Determine confidence
+            confidence = self._calculate_confidence(source_count, is_independent, velocity_bonus or is_priority)
+            
+            # STEP 9: ✨ INTEGRATION POINT 1 - Validate with Master Trading Rules (NEW)
+            rules_validation = None
+            rules_pass = True  # Default if rules engine unavailable
+            
+            # Only validate if Agent 5 confidence is high (score >= 8.0)
+            if score >= self.min_pass_score:
+                # Try to validate with Master Rules if token_data available
+                if 'token_data' in signals and signals['token_data']:
+                    rules_validation = self.validate_with_master_rules(token_address, signals['token_data'])
+                    if rules_validation:
+                        rules_pass = rules_validation.get('pass', True)
+                        # Apply position multiplier from rules
+                        if 'position_size_multiplier' in rules_validation:
+                            rules_multiplier = rules_validation['position_size_multiplier']
+                        else:
+                            rules_multiplier = 1.0
+                    else:
+                        rules_multiplier = 1.0
+                else:
+                    logger.debug("[AGENT_5] No token_data provided for Master Rules validation")
+                    rules_multiplier = 1.0
+            else:
+                rules_pass = False
+                rules_multiplier = 1.0
+            
+            # Step 10: Final decision (both Agent 5 AND Master Rules must pass)
+            if score >= self.min_pass_score and rules_pass:
+                status = "CLEARED"
+            elif score < self.min_pass_score:
+                status = "KILLED_AGENT5_GATE"
+            else:
+                status = "KILLED_MASTER_RULES_GATE"
+            
+            result = {
+                "agent_id": 5,
+                "token_address": token_address,
+                "token_symbol": token_symbol,
+                "analysis_timestamp": datetime.utcnow().isoformat(),
+                "status": status,
+                "composite_score": round(score, 2),
+                "confidence": confidence,
+                
+                "sources": {
+                    "source_count": source_count,
+                    "cleared_agents": cleared_sources,
+                    "is_independent": is_independent,
+                    "independence_factor": independence_factor
+                },
+                
+                "scoring_breakdown": {
+                    "base_score": round(base_score, 2),
+                    "confluence_multiplier": self.confluence_multipliers.get(source_count, 1.0),
+                    "velocity_bonus_applied": velocity_bonus,
+                    "time_decay_applied": token_age_min > 0,
+                    "age_penalty_applied": token_age_min < self.optimal_window_min or token_age_min > self.optimal_window_max,
+                    "token_age_minutes": round(token_age_min, 1)
+                },
+                
+                "agent_scores": {
+                    agent_key: {
+                        "score": signals.get(agent_key, {}).get('score'),
+                        "weight": self.weights.get(agent_key)
+                    }
+                    for agent_key in cleared_sources
+                },
+                
+                # INTEGRATION POINT 1: Master Trading Rules validation results
+                "master_rules_validation": rules_validation,
+                "master_rules_passed": rules_pass,
+                "position_size_multiplier": rules_multiplier,
+                
+                "failure_reason": (
+                    f"Score {score:.2f} below {self.min_pass_score} threshold" if status == "KILLED_AGENT5_GATE"
+                    else "Failed Master Trading Rules validation" if status == "KILLED_MASTER_RULES_GATE"
+                    else None
+                )
+            }
+            
+            logger.info(f"[AGENT_5] Final: {token_symbol} = {score:.2f}/10 (Master Rules: {'✅ PASS' if rules_pass else '❌ FAIL'}) → {status}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[AGENT_5] Aggregation error: {e}")
+            return None
+    
+    def _calculate_confidence(self, source_count: int, is_independent: bool, 
+                             velocity_bonus: bool) -> float:
+        """Calculate final confidence score (0-1.0)"""
+        confidence = 0.5  # Base
+        
+        # Boost for source count
+        confidence += (source_count - 1) * 0.15  # +0.15 per source beyond 1
+        
+        # Boost for independence
+        if is_independent:
+            confidence += 0.1
+        
+        # Boost for velocity
+        if velocity_bonus:
+            confidence += 0.1
+        
+        return min(1.0, confidence)
+    
+    def validate_with_master_rules(self, token_address: str, token_data: Dict) -> Optional[Dict]:
+        """
+        INTEGRATION POINT 1: Validate token against Master Trading Rules
+        
+        Evaluates token across 15 rules in 10 categories:
+        - Tier 1: 4 critical rules (all must pass)
+        - Tier 2: 5 recommended rules (3+ must pass)
+        - Tier 3: 4 complementary rules (pick 1-2)
+        
+        Args:
+            token_address: Solana token address
+            token_data: Complete token metadata (market cap, holders, community, fees, etc.)
+        
+        Returns:
+            {
+                'pass': bool,
+                'score': 0-10,
+                'position_multiplier': 0.5-2.0,
+                'failure_reasons': list,
+                'tier_1_passed': int,
+                'tier_2_passed': int,
+                'tier_3_passed': int
+            }
+        """
+        if not self.rules_engine:
+            logger.warning("[AGENT_5] Master Rules Engine not available, skipping validation")
+            return None
+        
+        try:
+            result = self.rules_engine.evaluate_token_comprehensive(token_data)
+            
+            logger.info(f"""
+[MASTER_RULES] Validation Result for {token_address[:16]}...
+├─ Pass: {'✅ YES' if result['pass'] else '❌ NO'}
+├─ Score: {result['overall_score']:.1f}/10
+├─ Position Multiplier: {result['position_size_multiplier']:.2f}x
+├─ Tier 1 (Critical): {result['tier_1_passed']}/{result['tier_1_total']}
+├─ Tier 2 (Recommended): {result['tier_2_passed']}/{result['tier_2_total']}
+└─ Tier 3 (Complementary): {result['tier_3_passed']}/{result['tier_3_total']}
+""")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[AGENT_5] Master Rules validation error: {e}")
+            return None
+
+    async def log_to_database(self, analysis_result: Dict):
+        """Log aggregated signal to database"""
+        if not self.db:
+            logger.warning("[AGENT_5] Database not available, skipping log")
+            return
+        
+        try:
+            # Create agent_5_analysis table entry
+            # (would need to extend database schema for full Agent 5 tracking)
+            # For now, Agent 5 mainly used for command division but we could log it
+            await self.db.log_agent_analysis("agent_5", analysis_result) # Generic log
+            logger.info(f"[AGENT_5] Signal aggregated and stored: {analysis_result['token_symbol']}")
+        except Exception as e:
+            logger.error(f"[AGENT_5] Error logging to database: {e}")
+
+
+if __name__ == '__main__':
+    logger.info("✅ Agent 5 module loaded")
+===
+#!/usr/bin/env python3
+"""
+AGENT 5: Signal Aggregator - Consensus & Confluence Validator
+Role: Cross-reference cleared signals from Agents 1-4, detect confluence, 
+       assign composite confidence score. Nothing reaches Command Division without passing here.
+"""
+
+import json
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+# Import Master Trading Rules Engine (INTEGRATION POINT 1)
+from src.rules.trading_rules_engine import TradingRulesEngine
+from src.ml.feature_builder import FeatureBuilder
+from src.ml.pump_predictor import PumpPredictor
+
+logger = logging.getLogger(__name__)
+
+class Agent5SignalAggregator:
+    """Consensus-based signal validation and scoring"""
+    
+    def __init__(self, config: Dict = None):
+        self.config = config or {}
+        logger.info("[AGENT_5] Signal Aggregator initialized")
+        
+        # Initialize Master Trading Rules Engine (INTEGRATION POINT 1)
+        try:
+            self.rules_engine = TradingRulesEngine(rules_path='config/trader_rules_master.json')
+            logger.info("[AGENT_5] ✅ Master Trading Rules Engine loaded (15 rules, 10 categories)")
+        except Exception as e:
+            logger.warning(f"[AGENT_5] ⚠️ Master Rules Engine failed to load: {e} (will continue without rules validation)")
+            self.rules_engine = None
+        
+        # ML scoring layer
+        try:
+            self.feature_builder = FeatureBuilder()
+            self.pump_predictor  = PumpPredictor()
+            logger.info(f"[AGENT_5] ✅ ML Pump Predictor loaded (mode: {self.pump_predictor.get_mode()})")
+        except Exception as e:
+            logger.warning(f"[AGENT_5] ⚠️ ML Predictor not available: {e}")
+            self.feature_builder = None
+            self.pump_predictor  = None
+        
+        # Scoring configuration - STATIC DEFAULTS (overridden by market regime)
+        self.weights_default = {
+            'agent_3': 0.40,  # Wallet Tracker (smartest money)
+            'agent_2': 0.25,  # Safety baseline
+            'agent_4': 0.20,  # Community Intel
+            'agent_1': 0.15   # Researcher discovery
+        }
+        
+        # Dynamic weighting by market regime (NEW - March 6, 2026)
+        self.weights_by_regime = {
+            'bullish': {
+                'agent_3': 0.35,  # Reduce wallet weighting (momentum matters more)
+                'agent_2': 0.20,  # Less strict on safety (risk acceptable)
+                'agent_4': 0.25,  # Boost community (FOMO driving)
+                'agent_1': 0.20   # Discovery more important (new money in)
+            },
+            'mixed': {  # DEFAULT (most conservative)
+                'agent_3': 0.40,  # Wallet Tracker most important
+                'agent_2': 0.25,  # Safety critical
+                'agent_4': 0.20,  # Community secondary
+                'agent_1': 0.15   # Discovery tertiary
+            },
+            'choppy': {
+                'agent_3': 0.50,  # PRIORITIZE smart money (only reliable signal)
+                'agent_2': 0.30,  # Strict safety (volatility = risk)
+                'agent_4': 0.10,  # Community noise is high
+                'agent_1': 0.10   # Discovery less relevant
+            },
+            'flat': {
+                'agent_3': 0.45,  # Still important (sideways = accumulation detection)
+                'agent_2': 0.25,  # Standard safety
+                'agent_4': 0.15,  # Community signals diluted
+                'agent_1': 0.15   # Discovery relevant
+            }
+        }
+        
+        # Use default initially (will be set based on market regime)
+        self.weights = self.weights_default.copy()
+        
+        # Confluence multipliers (based on number of independent confirmations)
+        self.confluence_multipliers = {
+            1: 1.0,   # Single source (previously capped at 6.0, now allows >9.0 outliers)
+            2: 1.2,   # Dual confirmation
+            3: 1.4,   # Triple confirmation
+            4: 1.6    # Quad confirmation
+        }
+        
+        # Time windows
+        self.optimal_window_min = 15  # minutes (token must be 15+ min old)
+        self.optimal_window_max = 45  # minutes (token must be 45- min old)
+        self.decay_interval = 15      # minutes (score decays -15% every 15 min)
+        self.decay_rate = 0.15        # 15% per interval
+        self.kill_age = 45            # minutes (signal killed if older than this)
+        self.velocity_window = 5      # minutes (for velocity bonus)
+        
+        # Pass threshold (reduced from 8.0 to 6.0 for higher volume)
+        self.min_pass_score = 6.0
+        
+        self.db = None
+    
+    # ============================================================
+    # MARKET REGIME & DYNAMIC WEIGHTING (NEW - March 6, 2026)
+    # ============================================================
+    
+    def detect_market_regime(self) -> str:
+        """
+        Detect current market regime and return regime name
+        
+        Returns: 'bullish' | 'mixed' | 'choppy' | 'flat'
+        
+        Could be enhanced with:
+        - Recent token success rate (bullish if >50% win rate)
+        - Volatility index (choppy if >20% daily swings)
+        - Volume trends (flat if volume declining)
+        """
+        # For now, read from config (would be enhanced with live data)
+        regime = self.config.get('market_regime', 'mixed').lower()
+        
+        if regime not in self.weights_by_regime:
+            regime = 'mixed'
+        
+        return regime
+    
+    def set_weights_for_regime(self, regime: str = None):
+        """
+        Dynamically set Agent 5 weights based on market regime
+        
+        Args:
+            regime: Market regime (bullish/mixed/choppy/flat)
+                    If None, detects automatically
+        """
+        if regime is None:
+            regime = self.detect_market_regime()
+        
+        if regime in self.weights_by_regime:
+            old_weights = self.weights.copy()
+            self.weights = self.weights_by_regime[regime].copy()
+            
+            logger.info(f"[AGENT_5] Market Regime: {regime.upper()}")
+            logger.info(f"[AGENT_5] Updated weights: A3={self.weights['agent_3']:.0%}, A2={self.weights['agent_2']:.0%}, A4={self.weights['agent_4']:.0%}, A1={self.weights['agent_1']:.0%}")
+        else:
+            logger.warning(f"[AGENT_5] Unknown regime '{regime}', using default")
+            self.weights = self.weights_default.copy()
+    
+    # ============================================================
+    # CONFLUENCE & INDEPENDENCE CHECKING
+    # ============================================================
+    
+    def detect_confluence(self, signals: Dict[str, Dict]) -> Tuple[int, List[str]]:
+        """
+        Detect how many independent sources confirmed this token
+        
+        Args:
+            signals: Dict with keys agent_1, agent_2, agent_3, agent_4
+                    Each has 'cleared' (bool) and other metadata
+        
+        Returns:
+            (source_count, independent_sources)
+        """
+        cleared_sources = []
+        
+        for agent_key in ['agent_1', 'agent_2', 'agent_3', 'agent_4']:
+            if signals.get(agent_key, {}).get('cleared'):
+                cleared_sources.append(agent_key)
+        
+        return len(cleared_sources), cleared_sources
+    
+    def check_independence(self, signals: Dict[str, Dict], cleared_sources: List[str]) -> Tuple[bool, float]:
+        """
+        Check if sources are truly independent or reacting to same public data
+        
+        Red flags for dependency:
+        - Agent 2 + Agent 3 analyzing same wallet data
+        - Agent 4 Discord + Agent 1 Telegram = same community
+        - Multiple agents referencing same trending pair
+        
+        Args:
+            signals: Full signal data from all agents
+            cleared_sources: List of agents that cleared the token
+        
+        Returns:
+            (is_independent, multiplier_reduction)
+        """
+        try:
+            if len(cleared_sources) <= 1:
+                # Single source is always "independent" (no dependency to detect)
+                return True, 1.0
+            
+            dependency_count = 0
+            
+            # Check Agent 2 + 3 dependency (both analyzing wallet data)
+            if 'agent_2' in cleared_sources and 'agent_3' in cleared_sources:
+                # If Agent 3 detected wallets BECAUSE of Agent 2 discovery, dependency
+                agent_2_discovery = signals.get('agent_2', {}).get('discovery_source')
+                agent_3_inputs = signals.get('agent_3', {}).get('data_sources', [])
+                
+                if agent_2_discovery in agent_3_inputs:
+                    dependency_count += 1
+                    logger.debug("[AGENT_5] Dependency: Agent 2 → Agent 3")
+            
+            # Check Agent 4 community + Agent 1 discovery (same community)
+            if 'agent_4' in cleared_sources and 'agent_1' in cleared_sources:
+                agent_4_discord = signals.get('agent_4', {}).get('community', {}).get('discord', {})
+                agent_1_source = signals.get('agent_1', {}).get('discovery_source')
+                
+                if agent_1_source == 'discord' and agent_4_discord.get('server_found'):
+                    dependency_count += 1
+                    logger.debug("[AGENT_5] Dependency: Agent 1 → Agent 4")
+            
+            # Calculate independence score
+            # Each dependency reduces confidence
+            # 0 dependencies = fully independent (no reduction)
+            # 1 dependency = 10% reduction
+            # 2 dependencies = 20% reduction
+            reduction = 1.0 - (dependency_count * 0.1)
+            reduction = max(0.8, reduction)  # Floor at 80% (not too harsh)
+            
+            is_independent = dependency_count == 0
+            
+            if not is_independent:
+                logger.info(f"[AGENT_5] Detected {dependency_count} dependencies - multiplier reduction: {reduction:.1%}")
+            
+            return is_independent, reduction
+            
+        except Exception as e:
+            logger.warning(f"[AGENT_5] Error checking independence: {e}")
+            return True, 1.0
+    
+    # ============================================================
+    # SCORING & TIME MODIFIERS
+    # ============================================================
+    
+    def calculate_base_score(self, signals: Dict[str, Dict], cleared_sources: List[str]) -> float:
+        """
+        Calculate base weighted score from cleared agents
+        
+        Args:
+            signals: Signal data from each agent
+            cleared_sources: Which agents cleared the token
+        
+        Returns:
+            Weighted score (0-10)
+        """
+        if not cleared_sources:
+            return 0.0
+        
+        total_score = 0.0
+        total_weight = 0.0
+        
+        for agent_key in cleared_sources:
+            agent_score = signals.get(agent_key, {}).get('score', 5.0)
+            weight = self.weights.get(agent_key, 0.0)
+            
+            total_score += agent_score * weight
+            total_weight += weight
+        
+        # Normalize by actual weights (not all agents may have cleared)
+        if total_weight > 0:
+            base_score = total_score / total_weight
+        else:
+            base_score = 0.0
+        
+        logger.debug(f"[AGENT_5] Base score: {base_score:.2f} (sources: {len(cleared_sources)})")
+        return base_score
+    
+    def apply_confluence_multiplier(self, base_score: float, source_count: int, 
+                                  independence: float) -> float:
+        """
+        Apply confluence multiplier based on number of independent sources
+        
+        Multipliers:
+        - 1 source: ×1.0 (now allows >9.0 if score is high enough)
+        - 2 sources: ×1.2
+        - 3 sources: ×1.4
+        - 4 sources: ×1.6
+        
+        Args:
+            base_score: Base weighted score
+            source_count: Number of cleared sources
+            independence: Independence reduction factor (0.8-1.0)
+        
+        Returns:
+            Multiplied score
+        """
+        multiplier = self.confluence_multipliers.get(source_count, 1.0)
+        
+        # Apply independence reduction to multiplier
+        multiplier *= independence
+        
+        # Apply cap for single-source signals
+        if source_count == 1:
+            multiplier = 1.0
+            # NEW: Allow single source if the base score is exceptional (> 9.0)
+            if base_score > 9.0:
+                logger.info(f"[AGENT_5] 🌟 Exceptional single source: {base_score:.2f} (allowed above 6.0 cap)")
+                return base_score
+            
+            capped_score = min(base_score, 6.0)  # Standard single source caps at 6/10
+            logger.debug(f"[AGENT_5] Single source: {base_score:.2f} → {capped_score:.2f} (standard cap 6.0)")
+            return capped_score
+        
+        # For multi-source, apply multiplier
+        result_score = base_score * multiplier
+        logger.debug(f"[AGENT_5] Confluence ×{multiplier:.2f}: {base_score:.2f} → {result_score:.2f}")
+        
+        return result_score
+    
+    def apply_velocity_bonus(self, current_score: float, signals: Dict[str, Dict],
+                            cleared_sources: List[str]) -> Tuple[float, bool]:
+        """
+        Velocity bonus: +0.5 if two confirmations arrive within 5 minutes of each other
+        
+        Args:
+            current_score: Score before velocity bonus
+            signals: Signal metadata with timestamps
+            cleared_sources: Which agents cleared
+        
+        Returns:
+            (score_with_bonus, bonus_applied)
+        """
+        if len(cleared_sources) < 2:
+            return current_score, False
+        
+        try:
+            timestamps = []
+            for agent_key in cleared_sources:
+                ts = signals.get(agent_key, {}).get('analysis_timestamp')
+                if ts:
+                    timestamps.append(datetime.fromisoformat(ts))
+            
+            if len(timestamps) < 2:
+                return current_score, False
+            
+            timestamps.sort()
+            time_diff = (timestamps[-1] - timestamps[0]).total_seconds() / 60
+            
+            if time_diff <= self.velocity_window:
+                bonus_score = current_score + 0.5
+                logger.info(f"[AGENT_5] Velocity bonus: +0.5 ({time_diff:.1f} min apart) → {bonus_score:.2f}")
+                return min(bonus_score, 10.0), True
+            
+            return current_score, False
+            
+        except Exception as e:
+            logger.warning(f"[AGENT_5] Velocity bonus error: {e}")
+            return current_score, False
+    
+    def apply_time_decay(self, current_score: float, token_age_minutes: float) -> float:
+        """
+        Time decay: Score drops 15% every 15 minutes unconfirmed
+        Signal killed at 45 minutes
+        
+        Args:
+            current_score: Score before decay
+            token_age_minutes: Age of token in minutes
+        
+        Returns:
+            Score after decay (or None if killed)
+        """
+        if token_age_minutes >= self.kill_age:
+            logger.warning(f"[AGENT_5] Signal KILLED: Token age {token_age_minutes:.1f}min (max {self.kill_age}min)")
+            return None
+        
+        intervals_elapsed = int(token_age_minutes / self.decay_interval)
+        decay_factor = (1 - self.decay_rate) ** intervals_elapsed
+        decayed_score = current_score * decay_factor
+        
+        if intervals_elapsed > 0:
+            logger.debug(f"[AGENT_5] Time decay: {current_score:.2f} × {decay_factor:.2f} = {decayed_score:.2f} ({intervals_elapsed}×{self.decay_rate:.0%})")
+        
+        return decayed_score
+    
+    def apply_age_penalty(self, current_score: float, token_age_minutes: float) -> float:
+        """
+        Age penalty: Token outside 15-45 minute optimal window gets explicit penalty
+        
+        Args:
+            current_score: Score before penalty
+            token_age_minutes: Age of token in minutes
+        
+        Returns:
+            Score after penalty
+        """
+        if self.optimal_window_min <= token_age_minutes <= self.optimal_window_max:
+            # Perfect window - no penalty
+            return current_score
+        
+        if token_age_minutes < self.optimal_window_min:
+            # Too young (< 15 min) - might be pump
+            penalty = 1.0  # 1 point penalty
+            penalized = current_score - penalty
+            logger.info(f"[AGENT_5] Age penalty (too young): -{penalty:.1f} → {penalized:.2f}")
+            return penalized
+        
+        if token_age_minutes > self.optimal_window_max:
+            # Too old (> 45 min) - should have killed by decay
+            penalty = 1.5  # 1.5 point penalty
+            penalized = current_score - penalty
+            logger.info(f"[AGENT_5] Age penalty (too old): -{penalty:.1f} → {penalized:.2f}")
+            return penalized
+        
+        return current_score
+    
+    # ============================================================
+    # AGGREGATION & FINAL DECISION
+    # ============================================================
+    
+    async def aggregate_signal(self, token_address: str, token_symbol: str,
+                        signals: Dict[str, Dict], discovered_at: str, market_regime: str = None) -> Optional[Dict]:
+        """
+        Aggregate all agent signals into single composite score and decision
+        
+        Args:
+            token_address: Token address
+            token_symbol: Token symbol
+            signals: Dict with agent_1, agent_2, agent_3, agent_4 results
+            discovered_at: ISO timestamp when token was discovered
+            market_regime: Optional market regime (bullish/mixed/choppy/flat)
+        
+        Returns:
+            Aggregated signal with composite score, or None if killed
+        """
+        logger.info(f"[AGENT_5] Aggregating signal for {token_symbol}")
+        
+        try:
+            # STEP 0: Set dynamic weights based on market regime
+            self.set_weights_for_regime(market_regime)
+
+            # STEP 0.1: Check for Agent 0 Commander Overrides in DB
+            if self.db:
+                try:
+                    # Check for min score override
+                    score_override = await self.db.get_system_state("agent_5_min_score")
+                    if score_override:
+                        self.min_pass_score = float(score_override)
+                        logger.info(f"[AGENT_5] 🎖️ COMMAND OVERRIDE: min_pass_score={self.min_pass_score}")
+
+                    # Check for weight overrides
+                    weights_override_json = await self.db.get_system_state("agent_weights_json")
+                    if weights_override_json:
+                        weights_override = json.loads(weights_override_json)
+                        self.weights.update(weights_override)
+                        logger.info(f"[AGENT_5] 🎖️ COMMAND OVERRIDE: weights={self.weights}")
+                except Exception as e:
+                    logger.error(f"[AGENT_5] Failed to apply Commander overrides: {e}")
+            
+            # Step 1: Detect confluence
+            source_count, cleared_sources = self.detect_confluence(signals)
+            
+            if source_count == 0:
+                logger.warning(f"[AGENT_5] No cleared sources - KILLED")
+                return None
+            
+            # Step 2: Check independence
+            is_independent, independence_factor = self.check_independence(signals, cleared_sources)
+            
+            # Step 3: Calculate base score
+            base_score = self.calculate_base_score(signals, cleared_sources)
+            
+            # Step 4: Apply confluence multiplier
+            score = self.apply_confluence_multiplier(base_score, source_count, independence_factor)
+            
+            # Step 5: Calculate token age and apply time decay
+            discovered_dt = datetime.fromisoformat(discovered_at)
+            token_age_min = (datetime.utcnow() - discovered_dt).total_seconds() / 60
+            
+            score = self.apply_time_decay(score, token_age_min)
+            if score is None:
+                return None  # Killed by time decay
+            
+            # Step 6: Apply age penalty
+            score = self.apply_age_penalty(score, token_age_min)
+            score = max(0, score)  # Floor at 0
+            
+            # Step 7: Apply velocity bonus
+            score, velocity_bonus = self.apply_velocity_bonus(score, signals, cleared_sources)
+            
+            # Step 7.1: Apply Narrative & Priority Bonuses (NEW - March 10, 2026)
+            is_priority = any(signals.get(a, {}).get('is_priority') for a in cleared_sources)
+            narrative_bonus = signals.get('agent_4', {}).get('narrative_bonus_awarded', False)
+            
+            if is_priority:
+                score += 1.5  # Heavy boost for priority smart money
+                logger.info(f"🚨 [AGENT_5] PRIORITY SIGNAL DETECTED: +1.5 Bonus → {score:.2f}")
+                
+            if narrative_bonus:
+                score += 0.5  # Bonus move if it aligns with underground narrative
+                logger.debug(f"✨ [AGENT_5] Narrative Alignment Bonus: +0.5 → {score:.2f}")
+
+            # Step 7.2: ML Pump Probability Layer
+            pump_prob = 0.5  # neutral default
+            if self.pump_predictor and self.feature_builder:
+                try:
+                    # Generate trade_id BEFORE build() so it's embedded in the feature vector
+                    trade_id = f"signal_{token_address[:8]}_{int(datetime.utcnow().timestamp())}"
+                    
+                    features = self.feature_builder.build(
+                        token_address=token_address,
+                        agent_1_data=signals.get('agent_1'),
+                        agent_2_data=signals.get('agent_2'),
+                        agent_3_data=signals.get('agent_3'),
+                        agent_4_data=signals.get('agent_4'),
+                        dex_data=signals.get('token_data'),
+                        pumpfun_data=signals.get('pumpfun_data'),
+                        trade_id=trade_id
+                    )
+                    pump_prob = self.pump_predictor.predict(features)
+                    
+                    # Save features for training (Async)
+                    await self.feature_builder.save(features, trade_id)
+                    
+                    # 65% rule-based, 35% ML blend
+                    ml_boost = (pump_prob - 0.5) * 2.0    # scale to +/- 1.0
+                    score = (score * 0.65) + (ml_boost * 0.35)
+                    logger.info(f"🧠 [AGENT_5] ML pump_prob={pump_prob:.3f} → blended score={score:.2f}")
+                except Exception as e:
+                    logger.warning(f"[AGENT_5] ML inference failed: {e}")
+
+            # Step 8: Determine confidence
+            confidence = self._calculate_confidence(source_count, is_independent, velocity_bonus or is_priority)
+            
+            # STEP 9: ✨ INTEGRATION POINT 1 - Validate with Master Trading Rules (NEW)
+            rules_validation = None
+            rules_pass = True  # Default if rules engine unavailable
+            
+            # Only validate if Agent 5 confidence is high (score >= 8.0)
+            if score >= self.min_pass_score:
+                # Try to validate with Master Rules if token_data available
+                if 'token_data' in signals and signals['token_data']:
+                    rules_validation = self.validate_with_master_rules(token_address, signals['token_data'])
+                    if rules_validation:
+                        rules_pass = rules_validation.get('pass', True)
+                        # Apply position multiplier from rules
+                        if 'position_size_multiplier' in rules_validation:
+                            rules_multiplier = rules_validation['position_size_multiplier']
+                        else:
+                            rules_multiplier = 1.0
+                    else:
+                        rules_multiplier = 1.0
+                else:
+                    logger.debug("[AGENT_5] No token_data provided for Master Rules validation")
+                    rules_multiplier = 1.0
+            else:
+                rules_pass = False
+                rules_multiplier = 1.0
+            
+            # Step 10: Final decision (both Agent 5 AND Master Rules must pass)
+            if score >= self.min_pass_score and rules_pass:
+                status = "CLEARED"
+            elif score < self.min_pass_score:
+                status = "KILLED_AGENT5_GATE"
+            else:
+                status = "KILLED_MASTER_RULES_GATE"
+            
+            result = {
+                "agent_id": 5,
+                "token_address": token_address,
+                "token_symbol": token_symbol,
+                "analysis_timestamp": datetime.utcnow().isoformat(),
+                "status": status,
+                "composite_score": round(score, 2),
+                "confidence": confidence,
+                
+                "sources": {
+                    "source_count": source_count,
+                    "cleared_agents": cleared_sources,
+                    "is_independent": is_independent,
+                    "independence_factor": independence_factor
+                },
+                
+                "scoring_breakdown": {
+                    "base_score": round(base_score, 2),
+                    "confluence_multiplier": self.confluence_multipliers.get(source_count, 1.0),
+                    "velocity_bonus_applied": velocity_bonus,
+                    "time_decay_applied": token_age_min > 0,
+                    "age_penalty_applied": token_age_min < self.optimal_window_min or token_age_min > self.optimal_window_max,
+                    "token_age_minutes": round(token_age_min, 1)
+                },
+                
+                "agent_scores": {
+                    agent_key: {
+                        "score": signals.get(agent_key, {}).get('score'),
+                        "weight": self.weights.get(agent_key)
+                    }
+                    for agent_key in cleared_sources
+                },
+                
+                # INTEGRATION POINT 1: Master Trading Rules validation results
+                "master_rules_validation": rules_validation,
+                "master_rules_passed": rules_pass,
+                "position_size_multiplier": rules_multiplier,
+                
+                "failure_reason": (
+                    f"Score {score:.2f} below {self.min_pass_score} threshold" if status == "KILLED_AGENT5_GATE"
+                    else "Failed Master Trading Rules validation" if status == "KILLED_MASTER_RULES_GATE"
+                    else None
+                )
+            }
+            
+            logger.info(f"[AGENT_5] Final: {token_symbol} = {score:.2f}/10 (Master Rules: {'✅ PASS' if rules_pass else '❌ FAIL'}) → {status}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[AGENT_5] Aggregation error: {e}")
+            return None
+    
+    def _calculate_confidence(self, source_count: int, is_independent: bool, 
+                             velocity_bonus: bool) -> float:
+        """Calculate final confidence score (0-1.0)"""
+        confidence = 0.5  # Base
+        
+        # Boost for source count
+        confidence += (source_count - 1) * 0.15  # +0.15 per source beyond 1
+        
+        # Boost for independence
+        if is_independent:
+            confidence += 0.1
+        
+        # Boost for velocity
+        if velocity_bonus:
+            confidence += 0.1
+        
+        return min(1.0, confidence)
+    
+    def validate_with_master_rules(self, token_address: str, token_data: Dict) -> Optional[Dict]:
+        """
+        INTEGRATION POINT 1: Validate token against Master Trading Rules
+        
+        Evaluates token across 15 rules in 10 categories:
+        - Tier 1: 4 critical rules (all must pass)
+        - Tier 2: 5 recommended rules (3+ must pass)
+        - Tier 3: 4 complementary rules (pick 1-2)
+        
+        Args:
+            token_address: Solana token address
+            token_data: Complete token metadata (market cap, holders, community, fees, etc.)
+        
+        Returns:
+            {
+                'pass': bool,
+                'score': 0-10,
+                'position_multiplier': 0.5-2.0,
+                'failure_reasons': list,
+                'tier_1_passed': int,
+                'tier_2_passed': int,
+                'tier_3_passed': int
+            }
+        """
+        if not self.rules_engine:
+            logger.warning("[AGENT_5] Master Rules Engine not available, skipping validation")
+            return None
+        
+        try:
+            result = self.rules_engine.evaluate_token_comprehensive(token_data)
+            
+            logger.info(f"""
+[MASTER_RULES] Validation Result for {token_address[:16]}...
+├─ Pass: {'✅ YES' if result['pass'] else '❌ NO'}
+├─ Score: {result['overall_score']:.1f}/10
+├─ Position Multiplier: {result['position_size_multiplier']:.2f}x
+├─ Tier 1 (Critical): {result['tier_1_passed']}/{result['tier_1_total']}
+├─ Tier 2 (Recommended): {result['tier_2_passed']}/{result['tier_2_total']}
+└─ Tier 3 (Complementary): {result['tier_3_passed']}/{result['tier_3_total']}
+""")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[AGENT_5] Master Rules validation error: {e}")
+            return None
+
+    async def log_to_database(self, analysis_result: Dict):
+        """Log aggregated signal to database"""
+        if not self.db:
+            logger.warning("[AGENT_5] Database not available, skipping log")
+            return
+        
+        try:
+            # Create agent_5_analysis table entry
+            # (would need to extend database schema for full Agent 5 tracking)
+            # For now, Agent 5 mainly used for command division but we could log it
+            await self.db.log_agent_analysis("agent_5", analysis_result) # Generic log
+            logger.info(f"[AGENT_5] Signal aggregated and stored: {analysis_result['token_symbol']}")
+        except Exception as e:
+            logger.error(f"[AGENT_5] Error logging to database: {e}")
+
+
+if __name__ == '__main__':
+    logger.info("✅ Agent 5 module loaded")
+```
+
+---
+
+### [trainer.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/ml/trainer.py)
+- Added `collect_outcomes_from_disk()` — scans `ml/data/outcome_*.json`
+- Added `retrain_from_disk()` — convenience wrapper that auto-discovers + retrains
+- Added logging to `save_outcome()`
+
+```diff:trainer.py
+#!/usr/bin/env python3
+"""
+ML Trainer — Weekly retraining pipeline for the XGBoost pump probability model.
+Triggered by Agent 9 (Performance Analyst) on its weekly review cycle.
+
+How it works:
+1. Loads all saved feature vectors from past week (src/ml/data/)
+2. Loads trade outcomes (win/loss) from trade history
+3. Labels each trade (pump > 50% in 30min = 1, else = 0)
+4. Trains (or retrains) an XGBoost classifier
+5. Compares new model vs old model accuracy
+6. If improved → hot-swaps the model file (pump_model.pkl)
+7. Logs results for Agent 9's audit report
+"""
+
+import os
+import json
+import pickle
+import logging
+import glob
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
+
+logger = logging.getLogger('ml_trainer')
+
+MODEL_PATH   = os.path.join(os.path.dirname(__file__), 'models', 'pump_model.pkl')
+DATA_DIR     = os.path.join(os.path.dirname(__file__), 'data')
+PUMP_THRESHOLD = 0.5   # 50% gain in 30min = positive label
+
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+class MLTrainer:
+    """Weekly training loop for the pump probability ML model."""
+
+    def retrain(self, trade_outcomes: List[Dict]) -> Dict:
+        """
+        Main entry point. Called by Agent 9 weekly.
+
+        Args:
+            trade_outcomes: List of dicts with keys:
+                - trade_id: str
+                - entry_price: float
+                - exit_price: float (or None if still open)
+                - price_change_pct: float (actual outcome)
+                - profit_usd: float
+
+        Returns:
+            Retraining report dict
+        """
+        logger.info(f"[TRAINER] Starting weekly ML retraining with {len(trade_outcomes)} trades")
+        
+        # 1. Load saved feature vectors
+        features, labels, trade_ids = self._load_training_data(trade_outcomes)
+        
+        if len(features) < 30:
+            logger.warning(f"[TRAINER] Only {len(features)} trades with features. Need 30+ for reliable training.")
+            return {
+                "status": "skipped",
+                "reason": f"Insufficient data: {len(features)} trades (min: 30)",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+        # 2. Train new model
+        new_model, accuracy, precision, recall = self._train(features, labels)
+
+        # 3. Compare with existing model
+        existing_accuracy = self._get_existing_accuracy()
+        improved = accuracy > existing_accuracy
+
+        report = {
+            "status": "completed",
+            "timestamp": datetime.utcnow().isoformat(),
+            "training_samples": len(features),
+            "positive_labels": sum(labels),
+            "negative_labels": len(labels) - sum(labels),
+            "new_accuracy":     round(accuracy, 4),
+            "new_precision":    round(precision, 4),
+            "new_recall":       round(recall, 4),
+            "old_accuracy":     round(existing_accuracy, 4),
+            "model_improved":   improved,
+        }
+
+        # 4. Save if improved (or first model)
+        if improved or existing_accuracy == 0.0:
+            self._save_model(new_model, features[0].keys() if features else [], len(features), accuracy)
+            report["action"] = "model_updated"
+            logger.info(f"[TRAINER] Model UPDATED: {existing_accuracy:.3f} → {accuracy:.3f}")
+        else:
+            report["action"] = "model_kept"
+            logger.info(f"[TRAINER] Keeping old model: {accuracy:.3f} < {existing_accuracy:.3f}")
+
+        return report
+
+    def _load_training_data(self, trade_outcomes: List[Dict]) -> Tuple[List[Dict], List[int], List[str]]:
+        """Match saved feature vectors with trade outcomes to build training set."""
+        features = []
+        labels   = []
+        ids      = []
+
+        outcome_map = {t['trade_id']: t for t in trade_outcomes}
+
+        # Scan feature files
+        pattern = os.path.join(DATA_DIR, "features_*.json")
+        for filepath in glob.glob(pattern):
+            try:
+                with open(filepath) as f:
+                    feat = json.load(f)
+                
+                trade_id    = feat.get('_trade_id')
+                token_addr  = feat.get('_token_address')
+                
+                outcome = outcome_map.get(trade_id) or outcome_map.get(token_addr)
+                if not outcome:
+                    continue
+                
+                price_change = outcome.get('price_change_pct', 0)
+                label = 1 if price_change >= PUMP_THRESHOLD * 100 else 0
+
+                # Clean: remove metadata keys
+                clean_feat = {k: v for k, v in feat.items() if not k.startswith('_') and isinstance(v, (int, float))}
+                
+                features.append(clean_feat)
+                labels.append(label)
+                ids.append(trade_id or token_addr)
+                
+            except Exception as e:
+                logger.debug(f"[TRAINER] Skipping {filepath}: {e}")
+
+        logger.info(f"[TRAINER] Loaded {len(features)} training samples ({sum(labels)} pumps, {len(labels)-sum(labels)} no-pumps)")
+        return features, labels, ids
+
+    def _train(self, features: List[Dict], labels: List[int]):
+        """Train XGBoost classifier. Falls back to RandomForest if xgboost not installed."""
+        try:
+            import xgboost as xgb
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import accuracy_score, precision_score, recall_score
+            import numpy as np
+
+            # Build feature matrix
+            feature_names = list(features[0].keys())
+            X = [[row.get(k, 0.0) for k in feature_names] for row in features]
+            y = labels
+
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+            model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                scale_pos_weight=max(1, len(y) / max(1, sum(y))),  # Handle imbalance
+                use_label_encoder=False,
+                eval_metric='logloss',
+                random_state=42
+            )
+            model.fit(X_train, y_train, verbose=False)
+
+            y_pred = model.predict(X_test)
+            acc  = accuracy_score(y_test, y_pred)
+            prec = precision_score(y_test, y_pred, zero_division=0)
+            rec  = recall_score(y_test, y_pred, zero_division=0)
+
+            logger.info(f"[TRAINER] XGBoost trained: acc={acc:.3f}, prec={prec:.3f}, rec={rec:.3f}")
+            return model, acc, prec, rec
+
+        except ImportError:
+            logger.warning("[TRAINER] xgboost not installed, using RandomForest fallback")
+            return self._train_fallback(features, labels)
+
+    def _train_fallback(self, features: List[Dict], labels: List[int]):
+        """Fallback: train with sklearn RandomForest if xgboost unavailable."""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score, precision_score, recall_score
+
+        feature_names = list(features[0].keys())
+        X = [[row.get(k, 0.0) for k in feature_names] for row in features]
+
+        X_train, X_test, y_train, y_test = train_test_split(X, labels, test_size=0.2, random_state=42)
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+        return (
+            model,
+            accuracy_score(y_test, y_pred),
+            precision_score(y_test, y_pred, zero_division=0),
+            recall_score(y_test, y_pred, zero_division=0)
+        )
+
+    def _get_existing_accuracy(self) -> float:
+        """Load accuracy of the currently saved model."""
+        if not os.path.exists(MODEL_PATH):
+            return 0.0
+        try:
+            with open(MODEL_PATH, 'rb') as f:
+                saved = pickle.load(f)
+            return saved.get('accuracy', 0.0)
+        except:
+            return 0.0
+
+    def _save_model(self, model, feature_names, trade_count: int, accuracy: float):
+        """Save model + metadata to disk."""
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        payload = {
+            'model':         model,
+            'feature_names': list(feature_names),
+            'accuracy':      accuracy,
+            'trained_on':    trade_count,
+            'trained_at':    datetime.utcnow().isoformat()
+        }
+        with open(MODEL_PATH, 'wb') as f:
+            pickle.dump(payload, f)
+        logger.info(f"[TRAINER] Model saved to {MODEL_PATH} (accuracy={accuracy:.3f})")
+
+    def save_outcome(self, trade_id: str, price_change_pct: float, profit_usd: float):
+        """
+        Store trade outcome for a specific trade_id.
+        Called by Agent 9 after a trade closes.
+        """
+        outcome_path = os.path.join(DATA_DIR, f"outcome_{trade_id}.json")
+        outcome = {
+            "trade_id": trade_id,
+            "price_change_pct": price_change_pct,
+            "profit_usd": profit_usd,
+            "recorded_at": datetime.utcnow().isoformat()
+        }
+        try:
+            with open(outcome_path, 'w') as f:
+                json.dump(outcome, f, indent=2)
+        except Exception as e:
+            logger.error(f"[TRAINER] Failed to save outcome: {e}")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    
+    # Test with mock outcomes
+    mock_outcomes = [
+        {"trade_id": "test_1", "price_change_pct": 75,  "profit_usd": 120},
+        {"trade_id": "test_2", "price_change_pct": -10, "profit_usd": -40},
+    ]
+    
+    trainer = MLTrainer()
+    report = trainer.retrain(mock_outcomes)
+    print(json.dumps(report, indent=2))
+===
+#!/usr/bin/env python3
+"""
+ML Trainer — Weekly retraining pipeline for the XGBoost pump probability model.
+Triggered by Agent 9 (Performance Analyst) on its weekly review cycle.
+
+How it works:
+1. Loads all saved feature vectors from past week (src/ml/data/)
+2. Loads trade outcomes (win/loss) from trade history
+3. Labels each trade (pump > 50% in 30min = 1, else = 0)
+4. Trains (or retrains) an XGBoost classifier
+5. Compares new model vs old model accuracy
+6. If improved → hot-swaps the model file (pump_model.pkl)
+7. Logs results for Agent 9's audit report
+"""
+
+import os
+import json
+import pickle
+import logging
+import glob
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
+
+logger = logging.getLogger('ml_trainer')
+
+MODEL_PATH   = os.path.join(os.path.dirname(__file__), 'models', 'pump_model.pkl')
+DATA_DIR     = os.path.join(os.path.dirname(__file__), 'data')
+PUMP_THRESHOLD = 0.5   # 50% gain in 30min = positive label
+
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+class MLTrainer:
+    """Weekly training loop for the pump probability ML model."""
+
+    def retrain(self, trade_outcomes: List[Dict]) -> Dict:
+        """
+        Main entry point. Called by Agent 9 weekly.
+
+        Args:
+            trade_outcomes: List of dicts with keys:
+                - trade_id: str
+                - entry_price: float
+                - exit_price: float (or None if still open)
+                - price_change_pct: float (actual outcome)
+                - profit_usd: float
+
+        Returns:
+            Retraining report dict
+        """
+        logger.info(f"[TRAINER] Starting weekly ML retraining with {len(trade_outcomes)} trades")
+        
+        # 1. Load saved feature vectors
+        features, labels, trade_ids = self._load_training_data(trade_outcomes)
+        
+        if len(features) < 30:
+            logger.warning(f"[TRAINER] Only {len(features)} trades with features. Need 30+ for reliable training.")
+            return {
+                "status": "skipped",
+                "reason": f"Insufficient data: {len(features)} trades (min: 30)",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+        # 2. Train new model
+        new_model, accuracy, precision, recall = self._train(features, labels)
+
+        # 3. Compare with existing model
+        existing_accuracy = self._get_existing_accuracy()
+        improved = accuracy > existing_accuracy
+
+        report = {
+            "status": "completed",
+            "timestamp": datetime.utcnow().isoformat(),
+            "training_samples": len(features),
+            "positive_labels": sum(labels),
+            "negative_labels": len(labels) - sum(labels),
+            "new_accuracy":     round(accuracy, 4),
+            "new_precision":    round(precision, 4),
+            "new_recall":       round(recall, 4),
+            "old_accuracy":     round(existing_accuracy, 4),
+            "model_improved":   improved,
+        }
+
+        # 4. Save if improved (or first model)
+        if improved or existing_accuracy == 0.0:
+            self._save_model(new_model, features[0].keys() if features else [], len(features), accuracy)
+            report["action"] = "model_updated"
+            logger.info(f"[TRAINER] Model UPDATED: {existing_accuracy:.3f} → {accuracy:.3f}")
+        else:
+            report["action"] = "model_kept"
+            logger.info(f"[TRAINER] Keeping old model: {accuracy:.3f} < {existing_accuracy:.3f}")
+
+        return report
+
+    def _load_training_data(self, trade_outcomes: List[Dict]) -> Tuple[List[Dict], List[int], List[str]]:
+        """Match saved feature vectors with trade outcomes to build training set."""
+        features = []
+        labels   = []
+        ids      = []
+
+        outcome_map = {t['trade_id']: t for t in trade_outcomes}
+
+        # Scan feature files
+        pattern = os.path.join(DATA_DIR, "features_*.json")
+        for filepath in glob.glob(pattern):
+            try:
+                with open(filepath) as f:
+                    feat = json.load(f)
+                
+                trade_id    = feat.get('_trade_id')
+                token_addr  = feat.get('_token_address')
+                
+                outcome = outcome_map.get(trade_id) or outcome_map.get(token_addr)
+                if not outcome:
+                    continue
+                
+                price_change = outcome.get('price_change_pct', 0)
+                label = 1 if price_change >= PUMP_THRESHOLD * 100 else 0
+
+                # Clean: remove metadata keys
+                clean_feat = {k: v for k, v in feat.items() if not k.startswith('_') and isinstance(v, (int, float))}
+                
+                features.append(clean_feat)
+                labels.append(label)
+                ids.append(trade_id or token_addr)
+                
+            except Exception as e:
+                logger.debug(f"[TRAINER] Skipping {filepath}: {e}")
+
+        logger.info(f"[TRAINER] Loaded {len(features)} training samples ({sum(labels)} pumps, {len(labels)-sum(labels)} no-pumps)")
+        return features, labels, ids
+
+    def _train(self, features: List[Dict], labels: List[int]):
+        """Train XGBoost classifier. Falls back to RandomForest if xgboost not installed."""
+        try:
+            import xgboost as xgb
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import accuracy_score, precision_score, recall_score
+            import numpy as np
+
+            # Build feature matrix
+            feature_names = list(features[0].keys())
+            X = [[row.get(k, 0.0) for k in feature_names] for row in features]
+            y = labels
+
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+            model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                scale_pos_weight=max(1, len(y) / max(1, sum(y))),  # Handle imbalance
+                use_label_encoder=False,
+                eval_metric='logloss',
+                random_state=42
+            )
+            model.fit(X_train, y_train, verbose=False)
+
+            y_pred = model.predict(X_test)
+            acc  = accuracy_score(y_test, y_pred)
+            prec = precision_score(y_test, y_pred, zero_division=0)
+            rec  = recall_score(y_test, y_pred, zero_division=0)
+
+            logger.info(f"[TRAINER] XGBoost trained: acc={acc:.3f}, prec={prec:.3f}, rec={rec:.3f}")
+            return model, acc, prec, rec
+
+        except ImportError:
+            logger.warning("[TRAINER] xgboost not installed, using RandomForest fallback")
+            return self._train_fallback(features, labels)
+
+    def _train_fallback(self, features: List[Dict], labels: List[int]):
+        """Fallback: train with sklearn RandomForest if xgboost unavailable."""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score, precision_score, recall_score
+
+        feature_names = list(features[0].keys())
+        X = [[row.get(k, 0.0) for k in feature_names] for row in features]
+
+        X_train, X_test, y_train, y_test = train_test_split(X, labels, test_size=0.2, random_state=42)
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+        return (
+            model,
+            accuracy_score(y_test, y_pred),
+            precision_score(y_test, y_pred, zero_division=0),
+            recall_score(y_test, y_pred, zero_division=0)
+        )
+
+    def _get_existing_accuracy(self) -> float:
+        """Load accuracy of the currently saved model."""
+        if not os.path.exists(MODEL_PATH):
+            return 0.0
+        try:
+            with open(MODEL_PATH, 'rb') as f:
+                saved = pickle.load(f)
+            return saved.get('accuracy', 0.0)
+        except:
+            return 0.0
+
+    def _save_model(self, model, feature_names, trade_count: int, accuracy: float):
+        """Save model + metadata to disk."""
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        payload = {
+            'model':         model,
+            'feature_names': list(feature_names),
+            'accuracy':      accuracy,
+            'trained_on':    trade_count,
+            'trained_at':    datetime.utcnow().isoformat()
+        }
+        with open(MODEL_PATH, 'wb') as f:
+            pickle.dump(payload, f)
+        logger.info(f"[TRAINER] Model saved to {MODEL_PATH} (accuracy={accuracy:.3f})")
+
+    def save_outcome(self, trade_id: str, price_change_pct: float, profit_usd: float):
+        """
+        Store trade outcome for a specific trade_id.
+        Called by Agent 9 after a trade closes.
+        """
+        outcome_path = os.path.join(DATA_DIR, f"outcome_{trade_id}.json")
+        outcome = {
+            "trade_id": trade_id,
+            "price_change_pct": price_change_pct,
+            "profit_usd": profit_usd,
+            "recorded_at": datetime.utcnow().isoformat()
+        }
+        try:
+            with open(outcome_path, 'w') as f:
+                json.dump(outcome, f, indent=2)
+            logger.info(f"[TRAINER] Outcome saved: {outcome_path}")
+        except Exception as e:
+            logger.error(f"[TRAINER] Failed to save outcome: {e}")
+
+    def collect_outcomes_from_disk(self) -> List[Dict]:
+        """
+        Scan ml/data/ for outcome_*.json files and return them as a list.
+        This allows retrain() to be called without external input.
+        """
+        outcomes = []
+        pattern = os.path.join(DATA_DIR, "outcome_*.json")
+        for filepath in glob.glob(pattern):
+            try:
+                with open(filepath) as f:
+                    outcome = json.load(f)
+                outcomes.append(outcome)
+            except Exception as e:
+                logger.debug(f"[TRAINER] Skipping outcome file {filepath}: {e}")
+        logger.info(f"[TRAINER] Collected {len(outcomes)} outcomes from disk")
+        return outcomes
+
+    def retrain_from_disk(self) -> Dict:
+        """
+        Convenience wrapper: collect outcomes from disk and retrain.
+        Called by the weekly scheduler job in main.py.
+        """
+        outcomes = self.collect_outcomes_from_disk()
+        if not outcomes:
+            return {
+                "status": "skipped",
+                "reason": "No outcome files found on disk",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        return self.retrain(outcomes)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    
+    # Test with mock outcomes
+    mock_outcomes = [
+        {"trade_id": "test_1", "price_change_pct": 75,  "profit_usd": 120},
+        {"trade_id": "test_2", "price_change_pct": -10, "profit_usd": -40},
+    ]
+    
+    trainer = MLTrainer()
+    report = trainer.retrain(mock_outcomes)
+    print(json.dumps(report, indent=2))
+
+```
+
+---
+
+### [agent_9_performance_analyst.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/agents/agent_9_performance_analyst.py)
+- Imports `MLTrainer`, instantiates in `__init__`
+- `notify_trade_closed()` now calls `ml_trainer.save_outcome()` with price_change_pct and pnl_usd after every trade close
+
+```diff:agent_9_performance_analyst.py
+import logging
+from datetime import datetime
+from typing import Optional, Dict
+from src.ml.learning_loop import LearningLoop
+
+logger = logging.getLogger(__name__)
+
+class PerformanceAnalyst:
+    """
+    Agent-9: The firm's Performance Analyst and Communications Director.
+    Responsiblities include formatting and dispatching Telegram alerts for trades,
+    kill switch events, and generating daily EOD summaries.
+    """
+    def __init__(self, db_client, telegram_client):
+        self.db = db_client
+        self.telegram = telegram_client
+        self.learning_loop = LearningLoop(db_client)
+        logger.info("[AGENT_9] Performance Analyst initialized with Learning Loop.")
+
+    async def notify_trade_opened(self, position) -> bool:
+        """Called by Agent-8 when a trade is successfully executed and entered."""
+        if not self.telegram:
+            return False
+
+        # Calculate percentages
+        entry_price = position.entry_price or 1.0 # Avoid div zero
+        tp1_pct = ((position.tp1_price - entry_price) / entry_price) * 100
+        sl_pct = ((position.sl_price - entry_price) / entry_price) * 100
+        
+        # Determine strategies and rationale (if available)
+        strategies = getattr(position, 'strategy_breakdown', [])
+        strategy_text = "\n".join([f"  • {s}" for s in strategies]) if strategies else "  • Systematic breakout entry"
+        
+        sl_tp_rationale = getattr(position, 'sl_tp_rationale', "Standard risk parameters applied.")
+
+        message = f"""
+NEW POSITION EXECUTED
+
+Token: {position.token}
+Action: {position.action.upper()}
+Entry Price: ${position.entry_price:,.8f}
+Size: ${position.position_size_usd:,.2f}
+
+Target TP1: ${position.tp1_price:,.8f} (+{tp1_pct:.2f}%)
+Stop Loss: ${position.sl_price:,.8f} ({sl_pct:.2f}%)
+
+Strategy Breakdown:
+{strategy_text}
+
+Risk Decision:
+{sl_tp_rationale}
+
+Trace ID: {position.position_id[:8]}
+"""
+        return await self._send_msg(message)
+
+    async def notify_pipeline_summary(self, stats: Dict) -> bool:
+        """Send a summary of the discovery pipeline for the latest scan."""
+        if not self.telegram:
+            return False
+            
+        # Only notify if at least one token reached Agent 6 (Macro)
+        if stats.get('agent_6_passed', 0) == 0:
+            return False
+
+        message = f"""
+PIPELINE SCAN SUMMARY
+
+Tokens Discovered (Agent 1): {stats.get('total_found', 0)}
+Tokens Processed (Intelligence Division): {stats.get('total_processed', 0)}
+Passed Agent 6 (Macro): {stats.get('agent_6_passed', 0)}
+Approved Agent 7 (Risk): {stats.get('agent_7_passed', 0)}
+Executed Agent 8 (Trade): {stats.get('agent_8_executed', 0)}
+
+Status: Scan Cycle Complete.
+"""
+        return await self._send_msg(message)
+
+
+    async def notify_trade_closed(self, position, exit_reason: str) -> bool:
+        """Called by Agent-8 when a position hits SL, TP, or TS."""
+        if not self.telegram:
+            return False
+
+        # Calculate PnL stats
+        pnl_str = f"+${position.pnl_usd:,.2f}" if position.pnl_usd >= 0 else f"-${abs(position.pnl_usd):,.2f}"
+        pnl_pct = (position.pnl_usd / position.position_size_usd) * 100 if position.position_size_usd > 0 else 0
+        pct_str = f"+{pnl_pct:.2f}%" if pnl_pct >= 0 else f"{pnl_pct:.2f}%"
+
+        # Determine header and emoji
+        if "TP" in exit_reason.upper() or position.pnl_usd > 0:
+            header = "💰 <b>TAKE PROFIT HIT</b> 💰"
+        elif "SL" in exit_reason.upper() or position.pnl_usd < 0:
+            header = "🛑 <b>STOP LOSS HIT</b> 🛑"
+        else:
+            header = "⚠️ <b>POSITION CLOSED</b> ⚠️"
+
+        daily_pnl = await self._get_daily_pnl(position.user_id)
+        daily_pnl_str = f"+${daily_pnl:,.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):,.2f}"
+
+        message = f"""
+{header}
+
+Token: <b>{position.token}</b>
+Exit Price: ${position.current_price:,.4f}
+Status: {position.status}
+Reason: {exit_reason}
+
+PnL: <b>{pnl_str} ({pct_str})</b>
+
+📊 Firm Daily PnL: {daily_pnl_str}
+"""
+        # Trigger Learning Loop for post-trade analysis
+        try:
+            # We wrap position in a dict for the learner
+            trade_data = {
+                "token": position.token,
+                "entry_price": position.entry_price,
+                "current_price": position.current_price,
+                "pnl_usd": position.pnl_usd,
+                "exit_reason": exit_reason,
+                "agent_analysis": getattr(position, 'agent_analysis', {}),
+                "refined_by": getattr(position, 'refined_by', None),
+                "refinement_reason": getattr(position, 'refinement_reason', None)
+            }
+            lesson = await self.learning_loop.analyze_trade_outcome(trade_data)
+            if lesson.get("learned_trait"):
+                message += f"\n\n🧠 <b>AI Lesson:</b> {lesson.get('learned_trait')}"
+        except Exception as e:
+            logger.error(f"[AGENT_9] Learning loop trigger failed: {e}")
+
+        return await self._send_msg(message)
+
+    async def notify_kill_switch(self, tier: int, reason: str, user_id: str = "default_user") -> bool:
+        """Send emergency kill switch alerts."""
+        if not self.telegram:
+            return False
+
+        message = f"""
+🚨 <b>KILL SWITCH TRIGGERED: TIER {tier}</b> 🚨
+
+Reason: {reason}
+
+"""
+        if tier == 1:
+            message += "Action: Reduced sizing and paused new entries for affected token (2h cooldown)."
+        elif tier == 2:
+            message += "Action: Paused all new portfolio entries. Existing trades being monitored. Resets at UTC midnight."
+        elif tier == 3:
+            message += "⚠️ <b>CRITICAL:</b> All positions liquidated at market. System isolated. Manual /resume required to restore node operations."
+
+        try:
+            # Reusing the existing method if possible, or just raw sending
+            if hasattr(self.telegram, 'send_kill_switch_alert'):
+                return await self.telegram.send_kill_switch_alert(str(tier), {"message": reason})
+            else:
+                return await self._send_msg(message)
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to send kill switch notification: {e}")
+            return False
+
+    async def generate_daily_report(self, user_id: str = "default_user") -> bool:
+        """Generates the EOD summary report from the DB and sends it to Telegram."""
+        if not self.telegram or not self.db:
+            return False
+
+        try:
+            positions = await self.db.get_all_positions(user_id)
+            closed = positions.get("closed", [])
+            
+            today = datetime.utcnow().date()
+            today_trades = []
+            
+            for c in closed:
+                try:
+                    c_date = datetime.fromisoformat(c.get("closed_at", "").replace("Z", "+00:00")).date()
+                    if c_date == today:
+                        today_trades.append(c)
+                except:
+                    pass
+            
+            total_trades = len(today_trades)
+            if total_trades == 0:
+                logger.info("[AGENT_9] No trades today for daily report.")
+                return False
+
+            winning_trades = [t for t in today_trades if t.get("pnl_usd", 0) > 0]
+            net_pnl = sum(t.get("pnl_usd", 0) for t in today_trades)
+            win_rate = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
+
+            best_trade = max(today_trades, key=lambda x: x.get("pnl_usd", -999999), default=None)
+            worst_trade = min(today_trades, key=lambda x: x.get("pnl_usd", 999999), default=None)
+
+            pnl_str = f"+${net_pnl:,.2f}" if net_pnl >= 0 else f"-${abs(net_pnl):,.2f}"
+            
+            message = f"""
+📋 <b>DAILY FIRM REPORT</b> 📋
+Date: {today.isoformat()}
+
+Trades Executed: {total_trades}
+Win Rate: {win_rate:.1f}%
+
+<b>Net PnL: {pnl_str}</b>
+"""
+            if best_trade and best_trade.get("pnl_usd", 0) > 0:
+                message += f"\n🏆 Best Trade: {best_trade.get('token')} (+${best_trade.get('pnl_usd', 0):,.2f})"
+            if worst_trade and worst_trade.get("pnl_usd", 0) < 0:
+                message += f"\n🩸 Worst Trade: {worst_trade.get('token')} (-${abs(worst_trade.get('pnl_usd', 0)):,.2f})"
+
+            return await self._send_msg(message)
+            
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to generate daily report: {e}")
+            return False
+
+    async def _get_daily_pnl(self, user_id: str) -> float:
+        """Helper to get current daily PnL."""
+        daily_pnl = 0.0
+        try:
+            if self.db:
+                positions = await self.db.get_all_positions(user_id)
+                closed = positions.get("closed", [])
+                today = datetime.utcnow().date()
+                for c in closed:
+                    try:
+                        c_date = datetime.fromisoformat(c.get("closed_at", "").replace("Z", "+00:00")).date()
+                        if c_date == today:
+                            daily_pnl += c.get("pnl_usd", 0.0)
+                    except:
+                        pass
+        except Exception as e:
+            logger.warning(f"[AGENT_9] Could not fetch daily PnL: {e}")
+        return daily_pnl
+
+    async def _send_msg(self, message: str) -> bool:
+        """Helper to safely ping telegram."""
+        try:
+            # We use send_status_update from TelegramBot to reach all users
+            if hasattr(self.telegram, 'send_status_update'):
+                return await self.telegram.send_status_update({"message": message.strip()})
+            else:
+                # Fallback to direct bot send if telegram is a raw bot (not recommended)
+                await self.telegram.app.bot.send_message(chat_id=self.telegram.chat_id, text=message.strip(), parse_mode='HTML')
+                logger.info("[AGENT_9] Notification sent via raw bot.")
+                return True
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to send notification: {e}")
+            return False
+===
+import logging
+from datetime import datetime
+from typing import Optional, Dict
+from src.ml.learning_loop import LearningLoop
+from src.ml.trainer import MLTrainer
+
+logger = logging.getLogger(__name__)
+
+class PerformanceAnalyst:
+    """
+    Agent-9: The firm's Performance Analyst and Communications Director.
+    Responsiblities include formatting and dispatching Telegram alerts for trades,
+    kill switch events, and generating daily EOD summaries.
+    """
+    def __init__(self, db_client, telegram_client):
+        self.db = db_client
+        self.telegram = telegram_client
+        self.learning_loop = LearningLoop(db_client)
+        self.ml_trainer = MLTrainer()
+        logger.info("[AGENT_9] Performance Analyst initialized with Learning Loop + ML Trainer.")
+
+    async def notify_trade_opened(self, position) -> bool:
+        """Called by Agent-8 when a trade is successfully executed and entered."""
+        if not self.telegram:
+            return False
+
+        # Calculate percentages
+        entry_price = position.entry_price or 1.0 # Avoid div zero
+        tp1_pct = ((position.tp1_price - entry_price) / entry_price) * 100
+        sl_pct = ((position.sl_price - entry_price) / entry_price) * 100
+        
+        # Determine strategies and rationale (if available)
+        strategies = getattr(position, 'strategy_breakdown', [])
+        strategy_text = "\n".join([f"  • {s}" for s in strategies]) if strategies else "  • Systematic breakout entry"
+        
+        sl_tp_rationale = getattr(position, 'sl_tp_rationale', "Standard risk parameters applied.")
+
+        message = f"""
+NEW POSITION EXECUTED
+
+Token: {position.token}
+Action: {position.action.upper()}
+Entry Price: ${position.entry_price:,.8f}
+Size: ${position.position_size_usd:,.2f}
+
+Target TP1: ${position.tp1_price:,.8f} (+{tp1_pct:.2f}%)
+Stop Loss: ${position.sl_price:,.8f} ({sl_pct:.2f}%)
+
+Strategy Breakdown:
+{strategy_text}
+
+Risk Decision:
+{sl_tp_rationale}
+
+Trace ID: {position.position_id[:8]}
+"""
+        return await self._send_msg(message)
+
+    async def notify_pipeline_summary(self, stats: Dict) -> bool:
+        """Send a summary of the discovery pipeline for the latest scan."""
+        if not self.telegram:
+            return False
+            
+        # Only notify if at least one token reached Agent 6 (Macro)
+        if stats.get('agent_6_passed', 0) == 0:
+            return False
+
+        message = f"""
+PIPELINE SCAN SUMMARY
+
+Tokens Discovered (Agent 1): {stats.get('total_found', 0)}
+Tokens Processed (Intelligence Division): {stats.get('total_processed', 0)}
+Passed Agent 6 (Macro): {stats.get('agent_6_passed', 0)}
+Approved Agent 7 (Risk): {stats.get('agent_7_passed', 0)}
+Executed Agent 8 (Trade): {stats.get('agent_8_executed', 0)}
+
+Status: Scan Cycle Complete.
+"""
+        return await self._send_msg(message)
+
+
+    async def notify_trade_closed(self, position, exit_reason: str) -> bool:
+        """Called by Agent-8 when a position hits SL, TP, or TS."""
+        if not self.telegram:
+            return False
+
+        # Calculate PnL stats
+        pnl_str = f"+${position.pnl_usd:,.2f}" if position.pnl_usd >= 0 else f"-${abs(position.pnl_usd):,.2f}"
+        pnl_pct = (position.pnl_usd / position.position_size_usd) * 100 if position.position_size_usd > 0 else 0
+        pct_str = f"+{pnl_pct:.2f}%" if pnl_pct >= 0 else f"{pnl_pct:.2f}%"
+
+        # Determine header and emoji
+        if "TP" in exit_reason.upper() or position.pnl_usd > 0:
+            header = "💰 <b>TAKE PROFIT HIT</b> 💰"
+        elif "SL" in exit_reason.upper() or position.pnl_usd < 0:
+            header = "🛑 <b>STOP LOSS HIT</b> 🛑"
+        else:
+            header = "⚠️ <b>POSITION CLOSED</b> ⚠️"
+
+        daily_pnl = await self._get_daily_pnl(position.user_id)
+        daily_pnl_str = f"+${daily_pnl:,.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):,.2f}"
+
+        message = f"""
+{header}
+
+Token: <b>{position.token}</b>
+Exit Price: ${position.current_price:,.4f}
+Status: {position.status}
+Reason: {exit_reason}
+
+PnL: <b>{pnl_str} ({pct_str})</b>
+
+📊 Firm Daily PnL: {daily_pnl_str}
+"""
+        # Trigger Learning Loop for post-trade analysis
+        try:
+            # We wrap position in a dict for the learner
+            trade_data = {
+                "token": position.token,
+                "entry_price": position.entry_price,
+                "current_price": position.current_price,
+                "pnl_usd": position.pnl_usd,
+                "exit_reason": exit_reason,
+                "agent_analysis": getattr(position, 'agent_analysis', {}),
+                "refined_by": getattr(position, 'refined_by', None),
+                "refinement_reason": getattr(position, 'refinement_reason', None)
+            }
+            lesson = await self.learning_loop.analyze_trade_outcome(trade_data)
+            if lesson.get("learned_trait"):
+                message += f"\n\n🧠 <b>AI Lesson:</b> {lesson.get('learned_trait')}"
+        except Exception as e:
+            logger.error(f"[AGENT_9] Learning loop trigger failed: {e}")
+
+        # Save trade outcome for ML trainer (XGBoost retraining pipeline)
+        try:
+            price_change_pct = ((position.current_price - position.entry_price) / position.entry_price) * 100 if position.entry_price > 0 else 0
+            self.ml_trainer.save_outcome(
+                trade_id=position.signal_id,
+                price_change_pct=price_change_pct,
+                profit_usd=position.pnl_usd
+            )
+            logger.info(f"[AGENT_9] 🧠 ML outcome saved for {position.token} (trade_id={position.signal_id})")
+        except Exception as e:
+            logger.error(f"[AGENT_9] ML outcome save failed: {e}")
+
+        return await self._send_msg(message)
+
+    async def notify_kill_switch(self, tier: int, reason: str, user_id: str = "default_user") -> bool:
+        """Send emergency kill switch alerts."""
+        if not self.telegram:
+            return False
+
+        message = f"""
+🚨 <b>KILL SWITCH TRIGGERED: TIER {tier}</b> 🚨
+
+Reason: {reason}
+
+"""
+        if tier == 1:
+            message += "Action: Reduced sizing and paused new entries for affected token (2h cooldown)."
+        elif tier == 2:
+            message += "Action: Paused all new portfolio entries. Existing trades being monitored. Resets at UTC midnight."
+        elif tier == 3:
+            message += "⚠️ <b>CRITICAL:</b> All positions liquidated at market. System isolated. Manual /resume required to restore node operations."
+
+        try:
+            # Reusing the existing method if possible, or just raw sending
+            if hasattr(self.telegram, 'send_kill_switch_alert'):
+                return await self.telegram.send_kill_switch_alert(str(tier), {"message": reason})
+            else:
+                return await self._send_msg(message)
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to send kill switch notification: {e}")
+            return False
+
+    async def generate_daily_report(self, user_id: str = "default_user") -> bool:
+        """Generates the EOD summary report from the DB and sends it to Telegram."""
+        if not self.telegram or not self.db:
+            return False
+
+        try:
+            positions = await self.db.get_all_positions(user_id)
+            closed = positions.get("closed", [])
+            
+            today = datetime.utcnow().date()
+            today_trades = []
+            
+            for c in closed:
+                try:
+                    c_date = datetime.fromisoformat(c.get("closed_at", "").replace("Z", "+00:00")).date()
+                    if c_date == today:
+                        today_trades.append(c)
+                except:
+                    pass
+            
+            total_trades = len(today_trades)
+            if total_trades == 0:
+                logger.info("[AGENT_9] No trades today for daily report.")
+                return False
+
+            winning_trades = [t for t in today_trades if t.get("pnl_usd", 0) > 0]
+            net_pnl = sum(t.get("pnl_usd", 0) for t in today_trades)
+            win_rate = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
+
+            best_trade = max(today_trades, key=lambda x: x.get("pnl_usd", -999999), default=None)
+            worst_trade = min(today_trades, key=lambda x: x.get("pnl_usd", 999999), default=None)
+
+            pnl_str = f"+${net_pnl:,.2f}" if net_pnl >= 0 else f"-${abs(net_pnl):,.2f}"
+            
+            message = f"""
+📋 <b>DAILY FIRM REPORT</b> 📋
+Date: {today.isoformat()}
+
+Trades Executed: {total_trades}
+Win Rate: {win_rate:.1f}%
+
+<b>Net PnL: {pnl_str}</b>
+"""
+            if best_trade and best_trade.get("pnl_usd", 0) > 0:
+                message += f"\n🏆 Best Trade: {best_trade.get('token')} (+${best_trade.get('pnl_usd', 0):,.2f})"
+            if worst_trade and worst_trade.get("pnl_usd", 0) < 0:
+                message += f"\n🩸 Worst Trade: {worst_trade.get('token')} (-${abs(worst_trade.get('pnl_usd', 0)):,.2f})"
+
+            return await self._send_msg(message)
+            
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to generate daily report: {e}")
+            return False
+
+    async def _get_daily_pnl(self, user_id: str) -> float:
+        """Helper to get current daily PnL."""
+        daily_pnl = 0.0
+        try:
+            if self.db:
+                positions = await self.db.get_all_positions(user_id)
+                closed = positions.get("closed", [])
+                today = datetime.utcnow().date()
+                for c in closed:
+                    try:
+                        c_date = datetime.fromisoformat(c.get("closed_at", "").replace("Z", "+00:00")).date()
+                        if c_date == today:
+                            daily_pnl += c.get("pnl_usd", 0.0)
+                    except:
+                        pass
+        except Exception as e:
+            logger.warning(f"[AGENT_9] Could not fetch daily PnL: {e}")
+        return daily_pnl
+
+    async def _send_msg(self, message: str) -> bool:
+        """Helper to safely ping telegram."""
+        try:
+            # We use send_status_update from TelegramBot to reach all users
+            if hasattr(self.telegram, 'send_status_update'):
+                return await self.telegram.send_status_update({"message": message.strip()})
+            else:
+                # Fallback to direct bot send if telegram is a raw bot (not recommended)
+                await self.telegram.app.bot.send_message(chat_id=self.telegram.chat_id, text=message.strip(), parse_mode='HTML')
+                logger.info("[AGENT_9] Notification sent via raw bot.")
+                return True
+        except Exception as e:
+            logger.error(f"[AGENT_9] Failed to send notification: {e}")
+            return False
+```
+
+---
+
+### [main.py](file:///c:/Users/User/OneDrive/Desktop/projects/Crypto-trading-bot/backend/src/main.py)
+- Imports `MLTrainer`
+- Added `weekly_ml_retrain_job()` method
+- Scheduled via `add_custom_job("ML Retrain", ..., 60*24*7)` — runs every 7 days
+
+```diff:main.py
+#!/usr/bin/env python3
+"""
+Solana Memecoin Autonomous Trading System - Phase 1 Foundation
+
+Main entry point for the trading bot
+"""
+
+import sys
+from pathlib import Path
+import time
+import signal
+from datetime import datetime
+
+# Add project root to path (so src imports work)
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Add stubs directory FIRST so mock modules are imported before real packages are attempted
+stubs_path = project_root / 'stubs'
+if stubs_path.exists():
+    sys.path.insert(0, str(stubs_path))
+    print("[INFO] Using mock modules for testing (stubs directory found)")
+
+from src.config import Config
+from src.database import Database
+from src.telegram_bot import TelegramBot
+from src.scheduler import TaskScheduler
+from src.logger import setup_logger
+from src.researcher_bot import ResearcherBot
+from src.agents.agent_0_commander import Agent0Commander
+from src.agents.agent_2_on_chain_analyst import OnChainAnalyst as Agent2OnChainAnalyst
+from src.agents.agent_3_wallet_tracker import Agent3WalletTracker
+from src.agents.agent_4_intel_agent import Agent4IntelAgent
+from src.agents.agent_5_signal_aggregator import Agent5SignalAggregator
+from src.agents.agent_6_macro_sentinel import Agent6MacroSentinel
+from src.agents.agent_7_risk_manager import Agent7RiskManager
+from src.agents.agent_8_trading_bot import TradingBot
+from src.agents.agent_9_performance_analyst import PerformanceAnalyst
+
+logger = setup_logger('main')
+
+# Set up loggers for all modules
+setup_logger('researcher')
+setup_logger('dexscreener')
+setup_logger('solscan')
+setup_logger('helius')
+setup_logger('rug_detector')
+setup_logger('ai_scorer')
+setup_logger('signal_formatter')
+setup_logger('position_sizer')
+setup_logger('telegram')
+setup_logger('database')
+setup_logger('llm_client')
+# New agent loggers
+setup_logger('src.agents.agent_0_commander')
+setup_logger('src.agents.agent_2_on_chain_analyst')
+setup_logger('src.agents.agent_3_wallet_tracker')
+setup_logger('intel_agent')  # agent_4
+setup_logger('src.agents.agent_5_signal_aggregator')
+setup_logger('src.agents.agent_6_macro_sentinel')
+setup_logger('src.agents.agent_7_risk_manager')
+setup_logger('src.agents.agent_8_trading_bot')
+setup_logger('src.agents.agent_9_performance_analyst')
+
+class TradingBotApp:
+    """Main application class"""
+    
+    def __init__(self):
+        logger.info('='*50)
+        logger.info('Initializing Trading Bot...')
+        logger.info('='*50)
+        
+        try:
+            # Load configuration
+            self.config = Config()
+            logger.info('✅ Config loaded')
+            
+            # Initialize database
+            self.db = Database()
+            logger.info('✅ Database initialized')
+            
+            # Get secrets
+            telegram_token = self.config.get_secret('TELEGRAM_BOT_TOKEN')
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            
+            if not telegram_token:
+                raise ValueError('TELEGRAM_BOT_TOKEN required in secrets.env')
+            
+            # Initialize Telegram bot
+            if chat_id:
+                self.telegram = TelegramBot(telegram_token, chat_id, db=self.db)
+                logger.info('✅ Telegram bot initialized')
+            else:
+                self.telegram = TelegramBot(telegram_token, "0", db=self.db)  # Placeholder
+                logger.warning('⚠️ Telegram chat ID not set yet - will extract from first message')
+            
+            # Initialize scheduler
+            self.scheduler = TaskScheduler(self.db)
+            logger.info('✅ Scheduler initialized')
+            
+            # Initialize Researcher Bot
+            self.researcher_bot = ResearcherBot(self.db, self.telegram)
+            logger.info('✅ Researcher Bot initialized')
+
+            # Legacy sync init continues here, but async parts move to start()
+            logger.info('✅ Basic app structure initialized')
+
+        except Exception as e:
+            logger.error(f'❌ Initialization failed: {e}')
+            raise
+
+    async def _initialize_agents(self):
+        """Asynchronously initialize agents and division wiring."""
+        logger.info('🏛️ Initializing Trading Divisions (Async)...')
+        
+        # ── Discovery & Intelligence Division ────────────────────────
+        self.agent_2_safety    = Agent2OnChainAnalyst(config=self.config.to_dict())
+        self.agent_3_tracker   = Agent3WalletTracker(config=self.config.to_dict())
+        self.agent_4_intel     = Agent4IntelAgent(config=self.config, db=self.db)
+        self.agent_5_aggregator = Agent5SignalAggregator(config=self.config.to_dict())
+
+        # ── Command Division ─────────────────────────────────────────
+        starting_capital = float(self.config.get_optional_secret('INITIAL_CAPITAL') or '10.0')
+        self.macro_sentinel    = Agent6MacroSentinel()
+        self.risk_manager_a7   = Agent7RiskManager(starting_capital=starting_capital)
+        self.risk_manager_a7.db = self.db
+        
+        self.performance_analyst  = PerformanceAnalyst(db_client=self.db, telegram_client=self.telegram)
+        self.commander = Agent0Commander(db_client=self.db, telegram_client=self.telegram)
+        
+        # ── Execution Division ───────────────────────────────────────
+        self.trading_bot = TradingBot(db_client=self.db, agent_9=self.performance_analyst)
+        await self.trading_bot.start()
+
+        # ── WIRING ──
+        # Intel (A4) -> Aggregator (A5) & Tracker (A3)
+        # ── WIRING: Shared Clients & Cross-Agent References ──────
+        
+        # Agent 2: Safety (Injections)
+        self.agent_2_safety.solscan = self.researcher_bot.solscan
+        self.agent_2_safety.rugcheck = RugcheckClient()
+        self.agent_2_safety.helius = self.researcher_bot.helius
+        self.agent_2_safety.dexscreener = self.researcher_bot.dexscreener
+        self.agent_2_safety.scorer = SafetyScorer()
+        self.agent_2_safety.db = self.db
+        
+        # Agent 3: Wallet Tracker (Injections)
+        self.agent_3_tracker.solscan = self.researcher_bot.solscan
+        self.agent_3_tracker.birdeye = self.researcher_bot.birdeye
+        self.agent_3_tracker.helius = self.researcher_bot.helius
+        self.agent_3_tracker.db = self.db
+        self.agent_3_tracker.agent_2 = self.agent_2_safety # Priority routing
+        
+        # Agent 4: Intel (Wiring)
+        self.agent_4_intel.agent_3 = self.agent_3_tracker
+        self.agent_4_intel.agent_5 = self.agent_5_aggregator
+        
+        # Agent 5: Aggregator (Injections)
+        self.agent_5_aggregator.db = self.db
+
+        # Telegram & Commander
+        self.telegram.commander = self.commander
+        
+        # Inject into Researcher
+        self.researcher_bot.agent_2_safety  = self.agent_2_safety
+        self.researcher_bot.agent_3_tracker = self.agent_3_tracker
+        self.researcher_bot.agent_4_intel   = self.agent_4_intel
+        self.researcher_bot.agent_5_aggregator = self.agent_5_aggregator
+        self.researcher_bot.macro_sentinel  = self.macro_sentinel
+        self.researcher_bot.risk_manager_a7 = self.risk_manager_a7
+        self.researcher_bot.trading_bot     = self.trading_bot
+        self.researcher_bot.agent_9         = self.performance_analyst
+        
+        # Start real-time discovery (Agent 4)
+        asyncio.create_task(self.agent_4_intel.start())
+        
+        logger.info('='*50)
+        logger.info('🏛️ Nine-Agent Trading Firm — ALL DIVISIONS ONLINE')
+        logger.info('='*50)
+    
+    async def researcher_job(self):
+        """Called every N minutes - scan for new tokens"""
+        logger.info('🔬 Researcher job running...')
+        await self.researcher_bot.scan()
+    
+    async def position_monitor_job(self):
+        """Called every N seconds - placeholder for Phase 4"""
+        logger.info('📊 Position monitor running...')
+        # Phase 4: Will implement position management here
+        pass
+    
+    async def daily_summary_job(self):
+        """Called daily - generates summary"""
+        logger.info('📈 Daily summary job running...')
+        await self.performance_analyst.generate_daily_report()
+
+    async def strategic_review_job(self):
+        """Called every 4 hours - Agent 0 strategic oversight"""
+        logger.info('🏛️ Strategic review job running...')
+        await self.commander.run_strategic_review()
+    
+    async def telegram_poll_job(self):
+        """No longer needed - Application framework handles its own polling."""
+        pass
+    
+    async def midnight_reset_job(self):
+        """Called at midnight UTC - reset daily counters"""
+        logger.info('🌙 Midnight reset job running...')
+        await self.researcher_bot.reset_daily_counters()
+    
+    async def start(self):
+        """Start the trading bot"""
+        logger.info('='*50)
+        logger.info('STARTING TRADING BOT')
+        logger.info('='*50)
+        
+        try:
+            # First, perform async initialization of agents
+            await self._initialize_agents()
+
+            # Add scheduled jobs
+            researcher_interval = self.config.get('scheduler.researcher_interval_minutes', 15)
+            position_interval = self.config.get('scheduler.position_monitor_interval_seconds', 60)
+            
+            self.scheduler.add_researcher_job(self.researcher_job, researcher_interval)
+            self.scheduler.add_position_monitor_job(self.position_monitor_job, position_interval)
+            self.scheduler.add_daily_summary_job(self.daily_summary_job)
+            self.scheduler.add_midnight_reset_job(self.midnight_reset_job)
+            
+            # Agent 0 Review Cycle (every 4 hours)
+            self.scheduler.add_custom_job(
+                "Strategic Review", 
+                self.strategic_review_job, 
+                60 * 4   # minutes → runs every 4h
+            )
+            
+            # Start Telegram Bot in the background
+            asyncio.create_task(self.telegram.run())
+            logger.info("✅ Telegram Bot application started")
+            
+            logger.info(f'📅 Scheduled jobs:')
+            for job in self.scheduler.get_jobs():
+                logger.info(f'   - {job.name}')
+            
+            # Start scheduler
+            self.scheduler.start()
+            
+            # Send startup notification
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            if chat_id and chat_id != "0":
+                await self.telegram.send_status_update({
+                    'message': '✅ Trading Bot started and monitoring'
+                })
+            else:
+                logger.info('⚠️ Chat ID not set - skipping startup notification')
+                logger.info('   To set chat ID: message your bot, then update secrets.env with TELEGRAM_CHAT_ID')
+            
+            logger.info('='*50)
+            logger.info('✅ Bot running. Press Ctrl+C to stop.')
+            logger.info('='*50)
+            
+            # Keep running
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                logger.info('⌛ Shutdown requested...')
+                await self.stop()
+        
+        except Exception as e:
+            logger.error(f'❌ Error during startup: {e}')
+            await self.stop()
+            raise
+    
+    async def stop(self):
+        """Stop the trading bot gracefully"""
+        logger.info('='*50)
+        logger.info('STOPPING TRADING BOT')
+        logger.info('='*50)
+        
+        try:
+            self.scheduler.stop()
+            
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            if chat_id and chat_id != "0":
+                await self.telegram.send_status_update({
+                    'message': '❌ Trading Bot stopped'
+                })
+            
+            logger.info('✅ Bot stopped gracefully')
+            logger.info('='*50)
+        except Exception as e:
+            logger.error(f'Error during shutdown: {e}')
+
+async def main():
+    """Entry point"""
+    import asyncio
+    app = None
+    try:
+        app = TradingBotApp()
+        await app.start()
+    except KeyboardInterrupt:
+        logger.info('Interrupted')
+    except Exception as e:
+        logger.error(f'Fatal error: {e}')
+    finally:
+        if app:
+            await app.stop()
+        sys.exit(0)
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
+===
+#!/usr/bin/env python3
+"""
+Solana Memecoin Autonomous Trading System - Phase 1 Foundation
+
+Main entry point for the trading bot
+"""
+
+import sys
+from pathlib import Path
+import time
+import signal
+from datetime import datetime
+
+# Add project root to path (so src imports work)
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Add stubs directory FIRST so mock modules are imported before real packages are attempted
+stubs_path = project_root / 'stubs'
+if stubs_path.exists():
+    sys.path.insert(0, str(stubs_path))
+    print("[INFO] Using mock modules for testing (stubs directory found)")
+
+from src.config import Config
+from src.database import Database
+from src.telegram_bot import TelegramBot
+from src.scheduler import TaskScheduler
+from src.logger import setup_logger
+from src.researcher_bot import ResearcherBot
+from src.agents.agent_0_commander import Agent0Commander
+from src.agents.agent_2_on_chain_analyst import OnChainAnalyst as Agent2OnChainAnalyst
+from src.agents.agent_3_wallet_tracker import Agent3WalletTracker
+from src.agents.agent_4_intel_agent import Agent4IntelAgent
+from src.agents.agent_5_signal_aggregator import Agent5SignalAggregator
+from src.agents.agent_6_macro_sentinel import Agent6MacroSentinel
+from src.agents.agent_7_risk_manager import Agent7RiskManager
+from src.agents.agent_8_trading_bot import TradingBot
+from src.agents.agent_9_performance_analyst import PerformanceAnalyst
+from src.ml.trainer import MLTrainer
+
+logger = setup_logger('main')
+
+# Set up loggers for all modules
+setup_logger('researcher')
+setup_logger('dexscreener')
+setup_logger('solscan')
+setup_logger('helius')
+setup_logger('rug_detector')
+setup_logger('ai_scorer')
+setup_logger('signal_formatter')
+setup_logger('position_sizer')
+setup_logger('telegram')
+setup_logger('database')
+setup_logger('llm_client')
+# New agent loggers
+setup_logger('src.agents.agent_0_commander')
+setup_logger('src.agents.agent_2_on_chain_analyst')
+setup_logger('src.agents.agent_3_wallet_tracker')
+setup_logger('intel_agent')  # agent_4
+setup_logger('src.agents.agent_5_signal_aggregator')
+setup_logger('src.agents.agent_6_macro_sentinel')
+setup_logger('src.agents.agent_7_risk_manager')
+setup_logger('src.agents.agent_8_trading_bot')
+setup_logger('src.agents.agent_9_performance_analyst')
+
+class TradingBotApp:
+    """Main application class"""
+    
+    def __init__(self):
+        logger.info('='*50)
+        logger.info('Initializing Trading Bot...')
+        logger.info('='*50)
+        
+        try:
+            # Load configuration
+            self.config = Config()
+            logger.info('✅ Config loaded')
+            
+            # Initialize database
+            self.db = Database()
+            logger.info('✅ Database initialized')
+            
+            # Get secrets
+            telegram_token = self.config.get_secret('TELEGRAM_BOT_TOKEN')
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            
+            if not telegram_token:
+                raise ValueError('TELEGRAM_BOT_TOKEN required in secrets.env')
+            
+            # Initialize Telegram bot
+            if chat_id:
+                self.telegram = TelegramBot(telegram_token, chat_id, db=self.db)
+                logger.info('✅ Telegram bot initialized')
+            else:
+                self.telegram = TelegramBot(telegram_token, "0", db=self.db)  # Placeholder
+                logger.warning('⚠️ Telegram chat ID not set yet - will extract from first message')
+            
+            # Initialize scheduler
+            self.scheduler = TaskScheduler(self.db)
+            logger.info('✅ Scheduler initialized')
+            
+            # Initialize Researcher Bot
+            self.researcher_bot = ResearcherBot(self.db, self.telegram)
+            logger.info('✅ Researcher Bot initialized')
+
+            # Legacy sync init continues here, but async parts move to start()
+            logger.info('✅ Basic app structure initialized')
+
+        except Exception as e:
+            logger.error(f'❌ Initialization failed: {e}')
+            raise
+
+    async def _initialize_agents(self):
+        """Asynchronously initialize agents and division wiring."""
+        logger.info('🏛️ Initializing Trading Divisions (Async)...')
+        
+        # ── Discovery & Intelligence Division ────────────────────────
+        self.agent_2_safety    = Agent2OnChainAnalyst(config=self.config.to_dict())
+        self.agent_3_tracker   = Agent3WalletTracker(config=self.config.to_dict())
+        self.agent_4_intel     = Agent4IntelAgent(config=self.config, db=self.db)
+        self.agent_5_aggregator = Agent5SignalAggregator(config=self.config.to_dict())
+
+        # ── Command Division ─────────────────────────────────────────
+        starting_capital = float(self.config.get_optional_secret('INITIAL_CAPITAL') or '10.0')
+        self.macro_sentinel    = Agent6MacroSentinel()
+        self.risk_manager_a7   = Agent7RiskManager(starting_capital=starting_capital)
+        self.risk_manager_a7.db = self.db
+        
+        self.performance_analyst  = PerformanceAnalyst(db_client=self.db, telegram_client=self.telegram)
+        self.commander = Agent0Commander(db_client=self.db, telegram_client=self.telegram)
+        
+        # ── Execution Division ───────────────────────────────────────
+        self.trading_bot = TradingBot(db_client=self.db, agent_9=self.performance_analyst)
+        await self.trading_bot.start()
+
+        # ── WIRING ──
+        # Intel (A4) -> Aggregator (A5) & Tracker (A3)
+        # ── WIRING: Shared Clients & Cross-Agent References ──────
+        
+        # Agent 2: Safety (Injections)
+        self.agent_2_safety.solscan = self.researcher_bot.solscan
+        self.agent_2_safety.rugcheck = RugcheckClient()
+        self.agent_2_safety.helius = self.researcher_bot.helius
+        self.agent_2_safety.dexscreener = self.researcher_bot.dexscreener
+        self.agent_2_safety.scorer = SafetyScorer()
+        self.agent_2_safety.db = self.db
+        
+        # Agent 3: Wallet Tracker (Injections)
+        self.agent_3_tracker.solscan = self.researcher_bot.solscan
+        self.agent_3_tracker.birdeye = self.researcher_bot.birdeye
+        self.agent_3_tracker.helius = self.researcher_bot.helius
+        self.agent_3_tracker.db = self.db
+        self.agent_3_tracker.agent_2 = self.agent_2_safety # Priority routing
+        
+        # Agent 4: Intel (Wiring)
+        self.agent_4_intel.agent_3 = self.agent_3_tracker
+        self.agent_4_intel.agent_5 = self.agent_5_aggregator
+        
+        # Agent 5: Aggregator (Injections)
+        self.agent_5_aggregator.db = self.db
+
+        # Telegram & Commander
+        self.telegram.commander = self.commander
+        
+        # Inject into Researcher
+        self.researcher_bot.agent_2_safety  = self.agent_2_safety
+        self.researcher_bot.agent_3_tracker = self.agent_3_tracker
+        self.researcher_bot.agent_4_intel   = self.agent_4_intel
+        self.researcher_bot.agent_5_aggregator = self.agent_5_aggregator
+        self.researcher_bot.macro_sentinel  = self.macro_sentinel
+        self.researcher_bot.risk_manager_a7 = self.risk_manager_a7
+        self.researcher_bot.trading_bot     = self.trading_bot
+        self.researcher_bot.agent_9         = self.performance_analyst
+        
+        # Start real-time discovery (Agent 4)
+        asyncio.create_task(self.agent_4_intel.start())
+        
+        logger.info('='*50)
+        logger.info('🏛️ Nine-Agent Trading Firm — ALL DIVISIONS ONLINE')
+        logger.info('='*50)
+    
+    async def researcher_job(self):
+        """Called every N minutes - scan for new tokens"""
+        logger.info('🔬 Researcher job running...')
+        await self.researcher_bot.scan()
+    
+    async def position_monitor_job(self):
+        """Called every N seconds - placeholder for Phase 4"""
+        logger.info('📊 Position monitor running...')
+        # Phase 4: Will implement position management here
+        pass
+    
+    async def daily_summary_job(self):
+        """Called daily - generates summary"""
+        logger.info('📈 Daily summary job running...')
+        await self.performance_analyst.generate_daily_report()
+
+    async def strategic_review_job(self):
+        """Called every 4 hours - Agent 0 strategic oversight"""
+        logger.info('🏛️ Strategic review job running...')
+        await self.commander.run_strategic_review()
+    
+    async def telegram_poll_job(self):
+        """No longer needed - Application framework handles its own polling."""
+        pass
+    
+    async def midnight_reset_job(self):
+        """Called at midnight UTC - reset daily counters"""
+        logger.info('🌙 Midnight reset job running...')
+        await self.researcher_bot.reset_daily_counters()
+    
+    async def weekly_ml_retrain_job(self):
+        """Called weekly - retrain XGBoost pump prediction model"""
+        logger.info('🧠 Weekly ML retraining job running...')
+        try:
+            trainer = MLTrainer()
+            report = trainer.retrain_from_disk()
+            logger.info(f"[ML] Retraining report: {report}")
+            
+            if report.get('status') == 'completed':
+                action = report.get('action', 'unknown')
+                accuracy = report.get('new_accuracy', 0)
+                samples = report.get('training_samples', 0)
+                logger.info(f"🧠 [ML] Retraining complete: {action} | accuracy={accuracy:.3f} | samples={samples}")
+            else:
+                logger.info(f"🧠 [ML] Retraining skipped: {report.get('reason', 'unknown')}")
+        except Exception as e:
+            logger.error(f'❌ ML retraining failed: {e}')
+    
+    async def start(self):
+        """Start the trading bot"""
+        logger.info('='*50)
+        logger.info('STARTING TRADING BOT')
+        logger.info('='*50)
+        
+        try:
+            # First, perform async initialization of agents
+            await self._initialize_agents()
+
+            # Add scheduled jobs
+            researcher_interval = self.config.get('scheduler.researcher_interval_minutes', 15)
+            position_interval = self.config.get('scheduler.position_monitor_interval_seconds', 60)
+            
+            self.scheduler.add_researcher_job(self.researcher_job, researcher_interval)
+            self.scheduler.add_position_monitor_job(self.position_monitor_job, position_interval)
+            self.scheduler.add_daily_summary_job(self.daily_summary_job)
+            self.scheduler.add_midnight_reset_job(self.midnight_reset_job)
+            
+            # Agent 0 Review Cycle (every 4 hours)
+            self.scheduler.add_custom_job(
+                "Strategic Review", 
+                self.strategic_review_job, 
+                60 * 4   # minutes → runs every 4h
+            )
+            
+            # ML Retraining (every 7 days)
+            self.scheduler.add_custom_job(
+                "ML Retrain",
+                self.weekly_ml_retrain_job,
+                60 * 24 * 7  # minutes → runs every 7 days
+            )
+            
+            # Start Telegram Bot in the background
+            asyncio.create_task(self.telegram.run())
+            logger.info("✅ Telegram Bot application started")
+            
+            logger.info(f'📅 Scheduled jobs:')
+            for job in self.scheduler.get_jobs():
+                logger.info(f'   - {job.name}')
+            
+            # Start scheduler
+            self.scheduler.start()
+            
+            # Send startup notification
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            if chat_id and chat_id != "0":
+                await self.telegram.send_status_update({
+                    'message': '✅ Trading Bot started and monitoring'
+                })
+            else:
+                logger.info('⚠️ Chat ID not set - skipping startup notification')
+                logger.info('   To set chat ID: message your bot, then update secrets.env with TELEGRAM_CHAT_ID')
+            
+            logger.info('='*50)
+            logger.info('✅ Bot running. Press Ctrl+C to stop.')
+            logger.info('='*50)
+            
+            # Keep running
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                logger.info('⌛ Shutdown requested...')
+                await self.stop()
+        
+        except Exception as e:
+            logger.error(f'❌ Error during startup: {e}')
+            await self.stop()
+            raise
+    
+    async def stop(self):
+        """Stop the trading bot gracefully"""
+        logger.info('='*50)
+        logger.info('STOPPING TRADING BOT')
+        logger.info('='*50)
+        
+        try:
+            self.scheduler.stop()
+            
+            chat_id = self.config.get_optional_secret('TELEGRAM_CHAT_ID')
+            if chat_id and chat_id != "0":
+                await self.telegram.send_status_update({
+                    'message': '❌ Trading Bot stopped'
+                })
+            
+            logger.info('✅ Bot stopped gracefully')
+            logger.info('='*50)
+        except Exception as e:
+            logger.error(f'Error during shutdown: {e}')
+
+async def main():
+    """Entry point"""
+    import asyncio
+    app = None
+    try:
+        app = TradingBotApp()
+        await app.start()
+    except KeyboardInterrupt:
+        logger.info('Interrupted')
+    except Exception as e:
+        logger.error(f'Fatal error: {e}')
+    finally:
+        if app:
+            await app.stop()
+        sys.exit(0)
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
+```
+
+## Data Flow: Before vs After
+
+```mermaid
+graph LR
+    subgraph "BEFORE (Broken)"
+        A5B["Agent 5 aggregate_signal"] -->|"build() + predict()"| FB1["FeatureBuilder"]
+        FB1 -->|"save() to WRONG PATH"| X1["Nothing saved"]
+        A8B["Agent 8 close trade"] --> A9B["Agent 9 notify"]
+        A9B -->|"Learning Loop only"| LL["LLM Analysis"]
+        A9B -.->|"save_outcome() NEVER CALLED"| X2["No outcomes"]
+    end
+```
+
+```mermaid
+graph LR
+    subgraph "AFTER (Fixed)"
+        A5A["Agent 5 aggregate_signal"] -->|"build(trade_id) + predict()"| FB2["FeatureBuilder"]
+        FB2 -->|"save() to ABSOLUTE path"| FD["ml/data/features_*.json"]
+        A8A["Agent 8 close trade"] --> A9A["Agent 9 notify"]
+        A9A --> LL2["Learning Loop"]
+        A9A -->|"save_outcome(signal_id)"| OD["ml/data/outcome_*.json"]
+        FD --> TR["MLTrainer.retrain_from_disk()"]
+        OD --> TR
+        TR -->|"Weekly job"| MODEL["ml/models/pump_model.pkl"]
+        MODEL -->|"Hot swap"| A5A
+    end
+```
+
+## Verification Results
+
+```
+[PASS] _trade_id embedded in features
+[PASS] Feature file saved to ml/data/
+[PASS] Outcome file saved to ml/data/
+[PASS] Trainer matched features to outcomes
+[PASS] Label is correct (pump=1 for 75%)
+[PASS] collect_outcomes_from_disk finds files
+[PASS] retrain_from_disk correctly skips (need 30+)
+[PASS] Test files cleaned up
+
+Total: 8/8 passed
+```
+
+## What Happens Next
+
+1. **Now**: Every token that reaches Agent 5's ML step will save a `features_*.json` file. Every closed trade will save an `outcome_*.json` file via Agent 9.
+2. **After 30 trades**: The weekly retrain job will start training XGBoost (needs 30+ matched samples).
+3. **After 50 trades**: The `PumpPredictor` auto-switches from `heuristic` mode to `ml` mode, activating the trained XGBoost model.
+4. **Phase 2**: Tune the 65/35 blend ratio, add time-of-day and BTC correlation features.

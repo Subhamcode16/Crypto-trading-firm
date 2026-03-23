@@ -1,0 +1,98 @@
+###############################################################
+# Crypto Trading Bot — Full Stack Docker Compose
+#
+# Usage:
+#   1. Copy docker.env.template → .env and fill in secrets
+#   2. docker compose build
+#   3. docker compose up -d
+#   4. docker compose logs -f bot    (watch bot logic)
+#   5. Open http://<VPS_IP>:5173     (dashboard)
+###############################################################
+
+services:
+  # ── Bot Logic (Python — 24/7 autonomous trading) ──────────
+  bot:
+    build: ./backend
+    container_name: crypto-bot-logic
+    command: ["python", "src/main.py"]
+    env_file: .env
+    environment:
+      - WS_SERVER_URL=ws://websocket:8080
+      - PYTHONUNBUFFERED=1
+      - PYTHONUTF8=1
+    volumes:
+      - ml-data:/app/src/ml/data
+      - ml-models:/app/src/ml/models
+      - ./backend/config:/app/config:ro
+    depends_on:
+      - websocket
+    restart: unless-stopped
+    networks:
+      - tradingnet
+
+  # ── Admin API (FastAPI on port 8000) ──────────────────────
+  api:
+    build: ./backend
+    container_name: crypto-api
+    command: ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      - CORS_ORIGINS=http://localhost:5173,http://frontend:5173
+      - PYTHONUNBUFFERED=1
+      - PYTHONUTF8=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/config:/app/config:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/system/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - tradingnet
+
+  # ── WebSocket Server (Node.js — real-time event bridge) ───
+  websocket:
+    build: ./server
+    container_name: crypto-websocket
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "const net = require('net'); const s = net.createConnection(8080, () => { s.end(); process.exit(0); }); s.on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - tradingnet
+
+  # ── Frontend Dashboard (React + nginx) ────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ""
+        VITE_WS_URL: ""
+    container_name: crypto-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+      - websocket
+    restart: unless-stopped
+    networks:
+      - tradingnet
+
+volumes:
+  ml-data:
+    driver: local
+  ml-models:
+    driver: local
+
+networks:
+  tradingnet:
+    driver: bridge

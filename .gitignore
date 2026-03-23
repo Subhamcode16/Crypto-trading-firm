@@ -1,5 +1,6 @@
 .env
 .env.local
+secrets.env
 backend/DISCORD_TOKEN_CONFIGURED.md
 *.log
 planner_debug.log
