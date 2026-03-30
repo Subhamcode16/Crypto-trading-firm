@@ -32,22 +32,24 @@ class PerformanceAnalyst:
         tp1_pct = ((position.tp1_price - entry_price) / entry_price) * 100
         sl_pct = ((position.sl_price - entry_price) / entry_price) * 100
         
-        # Determine strategies and rationale (if available)
-        strategies = getattr(position, 'strategy_breakdown', [])
-        strategy_text = "\n".join([f"  • {s}" for s in strategies]) if strategies else "  • Systematic breakout entry"
+        # Asset Metadata
+        asset_type = getattr(position, 'asset_type', 'solana_meme')
+        asset_emoji = "💎" if asset_type == 'solana_meme' else "💹" if asset_type == 'solana_token' else "📈"
+        asset_label = "SOLANA MEME" if asset_type == 'solana_meme' else "SOLANA TOKEN" if asset_type == 'solana_token' else "TRADITIONAL STOCK"
         
-        sl_tp_rationale = getattr(position, 'sl_tp_rationale', "Standard risk parameters applied.")
-
+        # Formatting
+        price_fmt = "8f" if asset_type != 'stock' else "2f"
+        
         message = f"""
-NEW POSITION EXECUTED
+{asset_emoji} <b>NEW {asset_label} EXECUTED</b> {asset_emoji}
 
 Token: {position.token}
 Action: {position.action.upper()}
-Entry Price: ${position.entry_price:,.8f}
+Entry Price: ${position.entry_price:,.{price_fmt}}
 Size: ${position.position_size_usd:,.2f}
 
-Target TP1: ${position.tp1_price:,.8f} (+{tp1_pct:.2f}%)
-Stop Loss: ${position.sl_price:,.8f} ({sl_pct:.2f}%)
+Target TP1: ${position.tp1_price:,.{price_fmt}} (+{tp1_pct:.2f}%)
+Stop Loss: ${position.sl_price:,.{price_fmt}} ({sl_pct:.2f}%)
 
 Strategy Breakdown:
 {strategy_text}
@@ -89,34 +91,34 @@ Trace ID: {position.position_id[:8]}
 
         # Build per-agent breakdown
         lines = [
-            "\ud83d\udce1 <b>SCAN CYCLE REPORT</b>",
+            "📡 <b>SCAN CYCLE REPORT</b>",
             "",
-            f"\ud83d\udd75\ufe0f <b>Agent 1 (Discovery):</b> {total_found} tokens found",
+            f"🕵️‍♂️ <b>Agent 1 (Discovery):</b> {total_found} tokens found",
         ]
         
         if total_found > 0:
-            lines.append(f"\ud83d\udd2c <b>Agent 2 (On-Chain Safety):</b> {a2_cleared} cleared, {a2_killed} killed")
-            lines.append(f"\ud83d\udd0d <b>Agent 3 (Wallet Tracker):</b> {a2_cleared} analyzed")
-            lines.append(f"\ud83d\udce1 <b>Agent 4 (Intel/Sentiment):</b> {a2_cleared} analyzed")
-            lines.append(f"\u2696\ufe0f <b>Agent 5 (Signal Aggregator):</b> {a5_cleared} cleared, {a5_killed} dropped")
+            lines.append(f"🧪 <b>Agent 2 (On-Chain Safety):</b> {a2_cleared} cleared, {a2_killed} killed")
+            lines.append(f"🔍 <b>Agent 3 (Wallet Tracker):</b> {a2_cleared} analyzed")
+            lines.append(f"📡 <b>Agent 4 (Intel/Sentiment):</b> {a2_cleared} analyzed")
+            lines.append(f"⚖️ <b>Agent 5 (Signal Aggregator):</b> {a5_cleared} cleared, {a5_killed} dropped")
             lines.append("")
             
             if a5_cleared > 0:
-                lines.append(f"\ud83d\udcca <b>Agent 6 (Macro Sentinel):</b> {a6_passed} passed, {a6_held} held")
-                lines.append(f"\ud83d\udee1\ufe0f <b>Agent 7 (Risk Manager):</b> {a7_passed} approved, {a7_blocked} blocked")
-                lines.append(f"\u26a1 <b>Agent 8 (Execution):</b> {a8_executed} filled, {a8_rejected} rejected")
+                lines.append(f"📊 <b>Agent 6 (Macro Sentinel):</b> {a6_passed} passed, {a6_held} held")
+                lines.append(f"🛡️ <b>Agent 7 (Risk Manager):</b> {a7_passed} approved, {a7_blocked} blocked")
+                lines.append(f"⚡ <b>Agent 8 (Execution):</b> {a8_executed} filled, {a8_rejected} rejected")
         
         if executed_tokens:
             lines.append("")
             lines.append("<b>Executed Tokens:</b>")
             for t in executed_tokens[:5]:
-                lines.append(f"  \ud83d\udcb8 {t.get('symbol', '?')} @ ${t.get('price', 0):.8f}")
+                lines.append(f"  💸 {t.get('symbol', '?')} @ ${t.get('price', 0):.8f}")
         
         if kill_reasons:
             lines.append("")
             lines.append("<b>Drop Reasons:</b>")
             for r in kill_reasons[-3:]:
-                lines.append(f"  \u274c {r}")
+                lines.append(f"  ❌ {r}")
         
         lines.append("")
         lines.append("<i>Scan Cycle Complete</i>")
@@ -136,12 +138,16 @@ Trace ID: {position.position_id[:8]}
         pct_str = f"+{pnl_pct:.2f}%" if pnl_pct >= 0 else f"{pnl_pct:.2f}%"
 
         # Determine header and emoji
+        asset_type = getattr(position, 'asset_type', 'solana_meme')
+        asset_emoji = "💎" if asset_type == 'solana_meme' else "💹" if asset_type == 'solana_token' else "📈"
+        price_fmt = "8f" if asset_type != 'stock' else "2f"
+
         if "TP" in exit_reason.upper() or position.pnl_usd > 0:
-            header = "💰 <b>TAKE PROFIT HIT</b> 💰"
+            header = f"💰 <b>{asset_emoji} TAKE PROFIT HIT {asset_emoji}</b> 💰"
         elif "SL" in exit_reason.upper() or position.pnl_usd < 0:
-            header = "🛑 <b>STOP LOSS HIT</b> 🛑"
+            header = f"🛑 <b>{asset_emoji} STOP LOSS HIT {asset_emoji}</b> 🛑"
         else:
-            header = "⚠️ <b>POSITION CLOSED</b> ⚠️"
+            header = f"⚠️ <b>{asset_emoji} POSITION CLOSED {asset_emoji}</b> ⚠️"
 
         daily_pnl = await self._get_daily_pnl(position.user_id)
         daily_pnl_str = f"+${daily_pnl:,.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):,.2f}"
@@ -251,17 +257,30 @@ Reason: {reason}
             best_trade = max(today_trades, key=lambda x: x.get("pnl_usd", -999999), default=None)
             worst_trade = min(today_trades, key=lambda x: x.get("pnl_usd", 999999), default=None)
 
+            # Group by asset type
+            categories = {"solana_meme": [], "solana_token": [], "stock": []}
+            for t in today_trades:
+                a_type = t.get("asset_type", "solana_meme")
+                if a_type not in categories: categories[a_type] = []
+                categories[a_type].append(t)
+            
             pnl_str = f"+${net_pnl:,.2f}" if net_pnl >= 0 else f"-${abs(net_pnl):,.2f}"
             
             message = f"""
 📋 <b>DAILY FIRM REPORT</b> 📋
 Date: {today.isoformat()}
 
-Trades Executed: {total_trades}
-Win Rate: {win_rate:.1f}%
-
-<b>Net PnL: {pnl_str}</b>
+<b>Performance Breakdown:</b>
 """
+            for cat, trades in categories.items():
+                if not trades: continue
+                cat_pnl = sum(t.get("pnl_usd", 0) for t in trades)
+                cat_emoji = "💎" if cat == "solana_meme" else "💹" if cat == "solana_token" else "📈"
+                cat_label = "Memes" if cat == "solana_meme" else "Tokens" if cat == "solana_token" else "Stocks"
+                cat_pnl_str = f"+${cat_pnl:,.2f}" if cat_pnl >= 0 else f"-${abs(cat_pnl):,.2f}"
+                message += f"{cat_emoji} {cat_label}: {cat_pnl_str} ({len(trades)} trades)\n"
+
+            message += f"\n<b>NET FIRM PNL: {pnl_str}</b>"
             if best_trade and best_trade.get("pnl_usd", 0) > 0:
                 message += f"\n🏆 Best Trade: {best_trade.get('token')} (+${best_trade.get('pnl_usd', 0):,.2f})"
             if worst_trade and worst_trade.get("pnl_usd", 0) < 0:
@@ -351,9 +370,13 @@ Win Rate: {win_rate:.1f}%
             try:
                 macro_regime = await self.db.get_system_state("macro_regime") or "unknown"
                 macro_summary = await self.db.get_system_state("macro_summary") or "No macro data"
+                spy_change = await self.db.get_system_state("spy_1d_change") or "0.00"
+                dxy_change = await self.db.get_system_state("dxy_1d_change") or "0.00"
+                
                 lines.extend([
                     f"📊 <b>Agent 6 (Macro Sentinel):</b>",
                     f"  Market Regime: <b>{macro_regime.upper()}</b>",
+                    f"  Global Macro: <b>S&P 500: {spy_change}% | DXY: {dxy_change}%</b>",
                     f"  Assessment: {macro_summary[:150]}",
                 ])
                 
@@ -465,18 +488,38 @@ Win Rate: {win_rate:.1f}%
                 lines.append("")
                 lines.append("No open positions.")
 
-            # ── DAILY PNL FOOTER ──
-            try:
-                daily_pnl = await self._get_daily_pnl(user_id)
-                pnl_str = f"+${daily_pnl:,.4f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):,.4f}"
-                lines.extend([
-                    "",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                    f"💰 <b>Daily PnL: {pnl_str}</b>",
-                    "<i>Digest generated by Agent 9 — Performance Analyst</i>",
-                ])
-            except:
-                pass
+            # ── PERFORMANCE BY ASSET CLASS ──
+            lines.extend([
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "<b>💰 PNL BY ASSET CLASS</b>",
+                "",
+            ])
+            
+            all_closed = []
+            if self.db:
+                positions = await self.db.get_all_positions(user_id)
+                all_closed = positions.get("closed", [])
+            
+            cat_pnl = {"solana_meme": 0.0, "solana_token": 0.0, "stock": 0.0}
+            for c in all_closed:
+                # Filter for last 4 hours (digest period)
+                try:
+                    c_time = datetime.fromisoformat(c.get("closed_at", "").replace("Z", "+00:00"))
+                    if (datetime.utcnow() - c_time).total_seconds() < 14400:
+                        a_type = c.get("asset_type", "solana_meme")
+                        if a_type in cat_pnl: cat_pnl[a_type] += float(c.get("pnl_usd", 0))
+                except: pass
+            
+            for cat, pnl in cat_pnl.items():
+                cat_emoji = "💎" if cat == "solana_meme" else "💹" if cat == "solana_token" else "📈"
+                label = "Memes" if cat == "solana_meme" else "Tokens" if cat == "solana_token" else "Stocks"
+                lines.append(f"{cat_emoji} {label}: ${pnl:,.4f}")
+            
+            lines.extend([
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "<i>Digest generated by Agent 9 — Performance Analyst</i>",
+            ])
 
             # Clear accumulated scan history for next period
             self._digest_scan_history = []

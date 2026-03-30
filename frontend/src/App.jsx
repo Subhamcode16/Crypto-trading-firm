@@ -7,6 +7,8 @@ import { GameController } from './components/panels/GameController';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAgentStore } from './stores/useAgentStore';
 import { StatsDashboard } from './pages/StatsDashboard';
+import { ConsoleView } from './pages/ConsoleView';
+import { AccountView } from './pages/AccountView';
 import { routeEvent } from './logic/EventAdapter';
 import { InboxDrawer } from './components/panels/InboxDrawer';
 import { config } from './config';
@@ -68,6 +70,8 @@ function App() {
       <Routes>
         <Route path="/" element={<OfficeView />} />
         <Route path="/dashboard" element={<StatsDashboard />} />
+        <Route path="/console" element={<ConsoleView />} />
+        <Route path="/account" element={<AccountView />} />
       </Routes>
     </div>
   );

@@ -23,6 +23,7 @@ import httpx
 import pandas as pd
 import asyncio
 import os
+import yfinance as yf
 from src.utils.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -169,11 +170,23 @@ class Agent6MacroSentinel:
         else: return "NORMAL"
 
     async def _fetch_market_data(self) -> Dict:
-        """Fetch latest price changes for BTC and SOL."""
+        """Fetch latest price changes for BTC, SOL, S&P 500, and DXY."""
         try:
             btc_df = await self.fetch_klines("BTCUSDT", "1h", limit=24)
             sol_df = await self.fetch_klines("SOLUSDT", "1h", limit=24)
             
+            # Fetch TradFi Macro Data (S&P 500 and DXY)
+            spy = yf.Ticker("^GSPC").history(period="2d")
+            dxy = yf.Ticker("DX-Y.NYB").history(period="2d")
+            
+            spy_change = 0.0
+            if len(spy) >= 2:
+                spy_change = ((spy['Close'].iloc[-1] - spy['Close'].iloc[-2]) / spy['Close'].iloc[-2]) * 100
+                
+            dxy_change = 0.0
+            if len(dxy) >= 2:
+                dxy_change = ((dxy['Close'].iloc[-1] - dxy['Close'].iloc[-2]) / dxy['Close'].iloc[-2]) * 100
+
             if btc_df is None or sol_df is None:
                 return {}
                 
@@ -186,7 +199,9 @@ class Agent6MacroSentinel:
                 "btc_1h_change": round(btc_1h, 2),
                 "sol_1h_change": round(sol_1h, 2),
                 "btc_24h_change": round(btc_24h, 2),
-                "sol_24h_change": round(sol_24h, 2)
+                "sol_24h_change": round(sol_24h, 2),
+                "spy_1d_change": round(spy_change, 2),
+                "dxy_1d_change": round(dxy_change, 2)
             }
         except Exception as e:
             logger.error(f"[AGENT_6] Error fetching market data: {e}")
@@ -358,14 +373,23 @@ Example: "4 - Sharp BTC rejection at 70k causing ecosystem-wide liquidations"
         if regime in ["mixed", "choppy"] or btc_score < 7 or sol_score < 7:
             ai_verdict, ai_score, ai_reason = await self._ai_analyze_macro_regime(market_data)
 
-        # Composite macro score (including Quant & AI)
-        macro_score = (btc_score * 0.3) + (sol_score * 0.2) + (quant_score * 0.2) + (ai_score * 0.3)
+        # Composite macro score (including Quant, AI, and Global Macro)
+        tradfi_score = 10.0
+        if market_data.get('spy_1d_change', 0) < -1.5: tradfi_score -= 4.0
+        if market_data.get('dxy_1d_change', 0) > 1.0: tradfi_score -= 2.0 # DXY up is usually bad for assets
+        
+        macro_score = (btc_score * 0.25) + (sol_score * 0.15) + (quant_score * 0.15) + (ai_score * 0.25) + (tradfi_score * 0.2)
 
         # Decision
         hard_blocked = btc_verdict == "HOLD" or sol_verdict == "HOLD" or ai_verdict == "HOLD"
         soft_blocked = macro_score < self.min_regime_score
-
-        if hard_blocked:
+        
+        # USER CHOICE B: Stock-only TradFi Macro Hold
+        lead_type = agent_5_signal.get('lead_type', 'solana_meme')
+        if lead_type == 'stock' and market_data.get('spy_1d_change', 0) < -2.0:
+            status = "MACRO_HOLD"
+            failure_reason = f"Strategic TradFi Hold: SPY drop {market_data.get('spy_1d_change')}% > 2% threshold"
+        elif hard_blocked:
             status = "MACRO_HOLD"
             failure_reason = btc_reason if btc_verdict == "HOLD" else sol_reason
         elif soft_blocked:

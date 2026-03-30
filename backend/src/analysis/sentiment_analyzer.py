@@ -42,11 +42,11 @@ class SentimentAnalyzer:
             # Truncate very long messages
             text = text[:500]
             
-            system_prompt = "You are a cryptocurrency sentiment analyst. Analyze Discord messages for Bullish/Bearish sentiment."
+            system_prompt = "You are a financial market sentiment analyst. Analyze messages or news headlines for Bullish/Bearish sentiment."
             
-            prompt = f"""Analyze the sentiment of this Discord message in the context of cryptocurrency trading.
-
-Message: "{text}"
+            prompt = f"""Analyze the sentiment of this text in the context of financial trading.
+            
+Text: "{text}"
 
 Respond with a JSON object containing:
 - sentiment: "positive", "negative", or "neutral"
@@ -54,9 +54,9 @@ Respond with a JSON object containing:
 - reasoning: one sentence explaining your decision
 
 Consider:
-- Positive: enthusiasm about token, bullish language, confidence in project
-- Negative: FUD, concerns about rug, warnings, criticism
-- Neutral: factual statements, questions, technical discussion
+- Positive: excitement, bullish language, strong fundamentals, positive news
+- Negative: fear, uncertainty, doubt, negative news, technical breakdown
+- Neutral: factual reporting, questions, lack of clear bias
 
 Respond ONLY with the JSON object, no other text."""
 

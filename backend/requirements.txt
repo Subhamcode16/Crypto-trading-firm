@@ -30,3 +30,4 @@ slowapi>=0.1.9
 
 # Social scraping
 twikit>=2.3.0
+yfinance>=0.2.40

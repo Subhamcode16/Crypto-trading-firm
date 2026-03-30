@@ -14,6 +14,8 @@ from src.config.default_channels import DEFAULT_CHANNELS
 from src.agents.parsers.generic import GenericParser
 from src.agents.parsers.lookonchain import LookonchainParser
 from src.agents.parsers.whale_alert import WhaleAlertParser
+from src.analysis.sentiment_analyzer import SentimentAnalyzer
+import yfinance as yf
 
 logger = logging.getLogger('intel_agent')
 
@@ -38,6 +40,8 @@ class Agent4IntelAgent:
             "lookonchain": LookonchainParser(),
             "whale_alert": WhaleAlertParser()
         }
+        
+        self.sentiment_analyzer = SentimentAnalyzer()
         
         # Signal targets (will be wired by main.py)
         self.agent_3 = None  # Wallet Tracker
@@ -156,6 +160,97 @@ class Agent4IntelAgent:
                     "wallet": wallet,
                     "source": f"telegram_{result.source_label}"
                 }))
+
+    async def analyze_token(self, token_address: str, symbol: str, name: str, description: str = "", lead_type: str = 'solana_meme') -> Dict:
+        """
+        Analyze sentiment/intel for a specific token or stock.
+        Called by ResearcherBot in the intelligence pipeline.
+        """
+        logger.info(f"[AGENT_4] Analyzing intel for {symbol} ({lead_type})...")
+        
+        try:
+            if lead_type == 'stock':
+                return await self._analyze_stock_intel(symbol)
+            else:
+                return await self._analyze_crypto_intel(symbol, name, description)
+                
+        except Exception as e:
+            logger.error(f"[AGENT_4] Intel analysis failed for {symbol}: {e}")
+            return {
+                "status": "CLEARED", # Default to clear on error to not block
+                "score": 5.0,
+                "confidence": 0.5,
+                "reasoning": f"Intel analysis error: {str(e)}",
+                "community": {}
+            }
+
+    async def _analyze_stock_intel(self, symbol: str) -> Dict:
+        """Fetch and analyze news sentiment for stocks using yfinance."""
+        try:
+            ticker = yf.Ticker(symbol)
+            news = ticker.news
+            
+            if not news:
+                return {
+                    "status": "CLEARED",
+                    "score": 6.0,
+                    "confidence": 0.6,
+                    "reasoning": "No significant news found. Market sentiment neutral.",
+                    "community": {"source": "yfinance_news", "count": 0}
+                }
+                
+            # Combine headlines
+            headlines = [n['title'] for n in news[:5]]
+            summary_text = ". ".join(headlines)
+            
+            # Use LLM for stock-specific sentiment
+            prompt = f"Analyze the following stock market headlines for {symbol}: {summary_text}. Return score (1-10) and brief reasoning."
+            # We'll use the internal sentiment analyzer (Haiku)
+            result = await self.sentiment_analyzer.analyze_single(prompt)
+            
+            score = 5.0
+            if result.get('sentiment') == 'positive': score = 8.0
+            elif result.get('sentiment') == 'negative': score = 3.0
+            
+            return {
+                "status": "CLEARED" if score >= 4.0 else "KILLED",
+                "score": score,
+                "confidence": result.get('confidence', 0.5),
+                "reasoning": f"Stock News Sentiment: {result.get('reasoning')}",
+                "community": {"source": "yfinance_news", "headlines": headlines}
+            }
+        except Exception as e:
+            logger.error(f"[AGENT_4] Stock intel failed: {e}")
+            raise
+
+    async def _analyze_crypto_intel(self, symbol: str, name: str, description: str) -> Dict:
+        """Standard crypto sentiment analysis."""
+        # For now, we use a default positive score if discovery found it, 
+        # or we could scrape Twitter/Discord if integrated.
+        # PixelFirm baseline: return 6.0 if no red flags.
+        
+        # Optionally use simple regex on description
+        from src.analysis.sentiment_analyzer import SimpleRegexSentiment
+        regex_analyzer = SimpleRegexSentiment()
+        res = regex_analyzer.analyze_single(description or name)
+        
+        score = 6.0
+        if res['sentiment'] == 'positive': score = 7.5
+        elif res['sentiment'] == 'negative': score = 3.5
+        
+        return {
+            "status": "CLEARED" if score >= 4.0 else "KILLED",
+            "score": score,
+            "confidence": res['confidence'],
+            "reasoning": f"Community Sentiment: {res['reasoning']}",
+            "community": {"sentiment": res['sentiment']}
+        }
+
+    async def log_to_database(self, result: Dict):
+        """Log intel result to the database."""
+        if not self.db: return
+        # Placeholder for DB logging
+        pass
 
     async def _pulse_agent_5(self, ca: str, result):
         """

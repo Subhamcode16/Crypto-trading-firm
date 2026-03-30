@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Mail, ShieldAlert, Activity, Monitor } from 'lucide-react';
+import { LayoutDashboard, Mail, ShieldAlert, Activity, Monitor, Terminal, Wallet } from 'lucide-react';
 import { useMacroStore } from '../../stores/useMacroStore';
 import { useMessageStore } from '../../stores/useMessageStore';
 import { useTradeStore } from '../../stores/useTradeStore';
@@ -45,6 +45,20 @@ export const Header = () => {
                     >
                         <LayoutDashboard size={12} />
                         STATS
+                    </button>
+                    <button
+                        onClick={() => navigate('/console')}
+                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/console' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
+                    >
+                        <Terminal size={12} />
+                        CONSOLE
+                    </button>
+                    <button
+                        onClick={() => navigate('/account')}
+                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/account' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
+                    >
+                        <Wallet size={12} />
+                        ACCOUNT
                     </button>
                 </div>
 

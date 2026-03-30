@@ -12,7 +12,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger('backtest')
 
+import sys
+from unittest.mock import MagicMock, AsyncMock
+
+# ══════════════════════════════════════════════════════════════════
+# DEPENDENCY MOCKS (Before any imports)
+# ══════════════════════════════════════════════════════════════════
+mock_anthropic = MagicMock()
+sys.modules["anthropic"] = mock_anthropic
+
+# Mock yfinance
+mock_yf = MagicMock()
+mock_ticker = MagicMock()
+# Mock history to return a DataFrame-like object with .iloc[-1]['Close']
+import pandas as pd
+mock_df = pd.DataFrame({'Close': [150.0, 155.0, 160.0]})
+mock_ticker.history.return_value = mock_df
+mock_yf.Ticker.return_value = mock_ticker
+sys.modules["yfinance"] = mock_yf
 # Add project root to path
+import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 # ══════════════════════════════════════════════════════════════════
@@ -153,7 +172,8 @@ async def run_backtest():
             tp2_price=0.000400,
             trailing_stop_pct=0.03,
             signal_id="test_id",
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            asset_type="solana_meme"
         )
 
         # Real call to execute_trade
@@ -182,6 +202,45 @@ async def run_backtest():
     except Exception as e:
         logger.error(f"  ❌ Agent 9 test failed: {e}")
         failed.append(f"Agent 9: {e}")
+        
+    # ══════════════════════════════════════════════════════════════════
+    # TEST 6: Multi-Asset Routing (Stock)
+    # ══════════════════════════════════════════════════════════════════
+    logger.info("\n[TEST 6] Multi-Asset Routing (Stock)")
+    try:
+        from src.agents.agent_8_trading_bot import TradingBot, TradeInstruction
+        bot = TradingBot(db_client=mock_db)
+        bot.paper_trading = True
+
+        instruction = TradeInstruction(
+            user_id="test_stock",
+            token='NVDA',
+            action='BUY',
+            entry_price=900.0,
+            position_size_usd=50.0,
+            sl_price=855.0, # 5% SL
+            tp1_price=990.0,
+            tp1_exit_pct=0.50,
+            tp2_price=1125.0,
+            trailing_stop_pct=0.02,
+            signal_id="stock_id",
+            timestamp=datetime.utcnow(),
+            asset_type="stock"
+        )
+
+        # This should trigger _execute_stock_mock
+        result = await bot.execute_trade(instruction)
+        logger.info(f"  DEBUG: result={result}")
+        if result and result.get('status') == 'FILLED' and result.get('asset_type') == 'stock':
+            logger.info(f"  ✅ Stock Executed: {instruction.token} | status=FILLED | type=stock")
+            passed.append("Agent 8: Stock routing and execution")
+        else:
+            logger.error(f"  ❌ Stock execution failed: {result}")
+            failed.append("Agent 8: Stock routing failed")
+
+    except Exception as e:
+        logger.error(f"  ❌ TEST 6 failed: {e}")
+        failed.append(f"TEST 6: {e}")
 
     # ══════════════════════════════════════════════════════════════════
     # SUMMARY

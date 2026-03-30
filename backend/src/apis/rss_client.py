@@ -29,7 +29,10 @@ class RSSClient:
     
     def __init__(self, feeds: List[str] = None):
         self.feeds = feeds or self.DEFAULT_FEEDS
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        self.client = httpx.AsyncClient(headers=self.headers, follow_redirects=True, timeout=10.0)
         
     async def get_latest_headlines(self) -> List[Dict]:
         """Fetch and parse headlines from all feeds (Async)"""

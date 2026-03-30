@@ -10,6 +10,7 @@ from dataclasses import dataclass, asdict, field
 
 import aiohttp
 import websockets
+import yfinance as yf
 from axiom_py import Client as AxiomClient
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class TradeInstruction:
     timestamp: datetime
     strategy_breakdown: List[str] = field(default_factory=list)
     sl_tp_rationale: Optional[str] = None
+    asset_type: str = 'solana_meme'
 
 
 @dataclass
@@ -56,6 +58,7 @@ class ActivePosition:
     closed_at: Optional[datetime]
     pnl_usd: float              # Realized PnL, updated on each exit
     signal_id: str              # Trace ID — links back to Agent-5 signal origin
+    asset_type: str = 'solana_meme'
     strategy_breakdown: List[str] = field(default_factory=list)
     sl_tp_rationale: Optional[str] = None
 
@@ -80,6 +83,11 @@ class TradingBot:
         self.db = db_client
         self.agent_9 = agent_9
         
+        # Load Paper Trading setting
+        self.paper_trade_enabled = os.getenv("PAPER_TRADING", "true").lower() == "true"
+        mode_str = "PAPER TRADING" if self.paper_trade_enabled else "LIVE TRADING"
+        logger.info(f"[AGENT_8] {mode_str} mode active (configured via PAPER_TRADING env var).")
+
         # Initialize Axiom if token is present, otherwise use a local mock
         axiom_token = os.environ.get("AXIOM_API_TOKEN")
         if axiom_token:
@@ -146,7 +154,7 @@ class TradingBot:
                     tp2_price=float(doc["tp2Price"]),
                     trailing_stop_pct=float(doc.get("trailingStopPct", 0.03)),
                     trailing_stop_price=float(doc.get("trailingStopPrice", 0)),
-                    paper_trade=True,
+                    paper_trade=self.paper_trade_enabled,
                     status="OPEN",
                     opened_at=opened_at,
                     closed_at=None,
@@ -209,6 +217,71 @@ class TradingBot:
 
     # ── MOCK EXECUTION ─────────────────────────────────────────────────────
 
+    async def _execute_stock_mock(self, instruction: TradeInstruction) -> Dict:
+        """Simulate stock execution using real-time Yahoo Finance data."""
+        ticker = instruction.token
+        logger.info(f"🤖 [AGENT_8] Executing MOCK STOCK order for {ticker}...")
+        
+        try:
+            stock = yf.Ticker(ticker)
+            history = stock.history(period="1d", interval="1m")
+            if history.empty:
+                return {"status": "REJECTED", "reason": "No market data available for stock"}
+            
+            fill_price = float(history.iloc[-1]['Close'])
+            position_id = f"pos_stock_{int(datetime.utcnow().timestamp())}"
+            
+            # Create internal position object
+            new_pos = ActivePosition(
+                position_id=position_id,
+                user_id=instruction.user_id,
+                token=ticker,
+                action=instruction.action,
+                entry_price=fill_price,
+                current_price=fill_price,
+                position_size_usd=instruction.position_size_usd,
+                remaining_size_usd=instruction.position_size_usd,
+                sl_price=instruction.sl_price,
+                tp1_price=instruction.tp1_price,
+                tp1_hit=False,
+                tp2_price=instruction.tp2_price,
+                trailing_stop_pct=instruction.trailing_stop_pct,
+                trailing_stop_price=fill_price * (1.0 - instruction.trailing_stop_pct) if instruction.action.upper() == "BUY" else fill_price * (1.0 + instruction.trailing_stop_pct),
+                paper_trade=True,
+                status="OPEN",
+                opened_at=datetime.utcnow(),
+                closed_at=None,
+                pnl_usd=0.0,
+                signal_id=instruction.signal_id,
+                asset_type="stock",
+                strategy_breakdown=instruction.strategy_breakdown,
+                sl_tp_rationale=instruction.sl_tp_rationale
+            )
+            
+            self.active_positions[position_id] = new_pos
+            
+            # Log to DB
+            await self.db.log_trade({
+                "trade_id": position_id,
+                "token_symbol": ticker,
+                "entry_price": fill_price,
+                "status": "open",
+                "asset_type": "stock",
+                "paper_trade": True,
+                "signal_id": instruction.signal_id
+            })
+            
+            return {
+                "status": "FILLED",
+                "position_id": position_id,
+                "fill_price": fill_price,
+                "asset_type": "stock"
+            }
+            
+        except Exception as e:
+            logger.error(f"Stock mock execution failed: {e}")
+            return {"status": "REJECTED", "reason": str(e)}
+
     async def _execute_mock(self, instruction: TradeInstruction) -> float:
         """
         Paper trading fill simulator.
@@ -264,7 +337,12 @@ class TradingBot:
                 return {"status": "REJECTED", "reason": "DUPLICATE_POSITION"}
 
         try:
-            # 3. Paper trading fill simulation
+            # 3. Branching based on asset type
+            asset_type = getattr(instruction, 'asset_type', 'solana_meme')
+            if asset_type == 'stock':
+                return await self._execute_stock_mock(instruction)
+
+            # 4. Paper trading fill simulation
             fill_price = await self._execute_mock(instruction)
             
             # 4. Calculate initial trailing stop
@@ -290,14 +368,15 @@ class TradingBot:
                 tp2_price=instruction.tp2_price,
                 trailing_stop_pct=instruction.trailing_stop_pct,
                 trailing_stop_price=initial_trailing_stop,
-                paper_trade=True,
+                paper_trade=self.paper_trade_enabled,
                 status="OPEN",
                 opened_at=datetime.utcnow(),
                 closed_at=None,
                 pnl_usd=0.0,
                 signal_id=instruction.signal_id,
                 strategy_breakdown=instruction.strategy_breakdown,
-                sl_tp_rationale=instruction.sl_tp_rationale
+                sl_tp_rationale=instruction.sl_tp_rationale,
+                asset_type=asset_type
             )
 
 
@@ -312,7 +391,8 @@ class TradingBot:
                 "status": "open",
                 "stop_loss_price": instruction.sl_price,
                 "tp1_price": instruction.tp1_price,
-                "tp2_price": instruction.tp2_price
+                "tp2_price": instruction.tp2_price,
+                "paper_trade": self.paper_trade_enabled
             })
 
             # 6b. Notify Telegram

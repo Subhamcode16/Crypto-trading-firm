@@ -207,6 +207,7 @@ class ResearcherBot:
                     candidate.get('address') or
                     candidate.get('token_address')
                 )
+                lead_type = candidate.get('lead_type', 'solana_meme')
                 
                 if not token_address:
                     logger.warning("[RESEARCHER] Skipping candidate with missing address")
@@ -217,19 +218,19 @@ class ResearcherBot:
                 discovered_at = candidate.get('pairCreatedAt') or datetime.utcnow().isoformat()
     
                 # ── AGENT 2: On-chain safety ──────────────────────────────
-                self._send_agent_event(2, "ANALYZING", {"token": token_symbol})
-                result_2 = await self.agent_2_safety.analyze_token(token_address)
+                await self._send_agent_event(2, "ANALYZING", {"token": token_symbol})
+                result_2 = await self.agent_2_safety.analyze_token(token_address, lead_type=lead_type)
                 await self.agent_2_safety.log_to_database(result_2)
     
                 if result_2['status'] == 'KILLED':
-                    self._send_agent_event(2, "HOLD_SIGNAL", {"reason": result_2.get('failure_reason')})
+                    await self._send_agent_event(2, "HOLD_SIGNAL", {"reason": result_2.get('failure_reason')})
                     results['agent_2_killed'].append(result_2)
                     self.signals_dropped_today += 1
-                    self._send_pipeline_update()
+                    await self._send_pipeline_update()
                     logger.warning(f"[AGENT_2] KILLED: {token_symbol} | {result_2.get('failure_reason')}")
                     continue
                 
-                self._send_agent_event(2, "CLEAR", {"score": result_2.get('safety_score')})
+                await self._send_agent_event(2, "CLEAR", {"score": result_2.get('safety_score')})
                 logger.info(f"[AGENT_2] CLEARED: {token_symbol} | score {result_2.get('safety_score', 0):.1f}/10")
     
                 # ── AGENT 3: Wallet Tracker ───────────────────────────────
@@ -245,7 +246,8 @@ class ResearcherBot:
                     token_address,
                     token_symbol,
                     token_name,
-                    candidate.get('baseToken', {}).get('description', '')
+                    candidate.get('baseToken', {}).get('description', ''),
+                    lead_type=lead_type
                 )
                 await self.agent_4_intel.log_to_database(result_4)
                 self._send_agent_event(4, "CLEAR" if result_4['status'] == 'CLEARED' else "HOLD_SIGNAL")
@@ -328,6 +330,15 @@ class ResearcherBot:
         logger.info('='*60)
         
         try:
+            # ── BUDGET KILL-SWITCH ──
+            if self.cost_tracker.is_budget_exceeded():
+                logger.warning("🛑 [BUDGET] AI spending limit reached for today/month. Discovery cycle PAUSED.")
+                summary = self.cost_tracker.get_cost_summary()
+                await self.telegram.send_status_update({
+                    'message': f"🚫 *AI Budget Exceeded*\nDaily: ${summary['daily_cost']:.2f} / ${summary['daily_limit']:.2f}\nMonth: ${summary['monthly_cost']:.2f} / ${summary['monthly_limit']:.2f}\nDiscovery cycle suspended."
+                })
+                return
+
             self.market_regime = self.detect_market_regime()
             scan_stats = {
                 'total_found': 0, 'total_processed': 0,
@@ -345,7 +356,7 @@ class ResearcherBot:
             leads = await self.agent_1.discover_new_leads()
             self.tokens_found_today += len(leads)
             scan_stats['total_found'] = len(leads)
-            self._send_pipeline_update()
+            await self._send_pipeline_update()
             
             if not leads:
                 logger.info("ℹ️ No new leads found this cycle.")
@@ -353,14 +364,50 @@ class ResearcherBot:
 
             # ── PROCESSING PIPELINE (Agents 2-5) ─────────────────
             cleared_signals = []
+            
+            # Load filters from config
+            min_vol = float(self.config.get('filters.min_volume_usd', 10000.0))
+            min_liq = float(self.config.get('filters.min_liquidity_usd', 5000.0))
+
             for lead in leads[:15]:  # Safety cap per cycle
                 # Normalize candidate data for processing
-                if lead['source'] != 'dexscreener':
+                if lead.get('type') == 'stock':
+                    # USER CHOICE B: Construct simplified candidate for stocks
+                    candidate = {
+                        'address': lead['address'], # Ticker
+                        'symbol': lead['symbol'],
+                        'name': lead['symbol'],
+                        'price_usd': lead.get('raw', {}).get('price', 0),
+                        'lead_type': 'stock',
+                        'source': lead['source'],
+                        'volume_24h': lead.get('raw', {}).get('volume', 999999), # Assume high for stocks
+                        'liquidity_usd': 999999
+                    }
+                elif lead['source'] != 'dexscreener':
                     full_data = await self.dexscreener.get_token_pairs(lead['address'])
                     if not full_data: continue
                     candidate = full_data[0]
+                    # Attach lead type for routing
+                    candidate['lead_type'] = lead.get('type', 'solana_token')
                 else:
                     candidate = lead.get('raw') or lead
+                    candidate['lead_type'] = lead.get('type', 'solana_meme')
+
+                # ── HIGH-CONVICTION DATA FILTER (Pre-AI) ──
+                cand_vol = float(candidate.get('volume', {}).get('h24', 0) or candidate.get('volume_24h', 0))
+                cand_liq = float(candidate.get('liquidity', {}).get('usd', 0) or candidate.get('liquidity_usd', 0))
+                
+                if cand_vol < min_vol and cand_liq < min_liq:
+                    logger.info(f"⏭️ Skipping {candidate.get('symbol')} - Low activity (Vol: ${cand_vol:.0f}, Liq: ${cand_liq:.0f})")
+                    self.signals_dropped_today += 1
+                    continue
+
+                # ── RESEARCH CACHE CHECK (12h) ──
+                token_address = lead['address']
+                cache_hours = int(self.config.get('filters.analysis_cache_hours', 12))
+                if await self._token_analyzed_recently(token_address, hours=cache_hours):
+                    logger.info(f"♻️ Skipping {candidate.get('symbol')} - Analyzed within last {cache_hours}h")
+                    continue
 
                 # Run Intelligence Div gates (Agent 2 -> 3 -> 4 -> 5)
                 intel_results = await self.process_with_agents_2_3_4_5([candidate])
@@ -466,6 +513,7 @@ class ResearcherBot:
             signal = SignalFormatter.format(parsed, rug_analysis, ai_score)
             if not signal:
                 self.signals_dropped_today += 1
+                await self._send_pipeline_update()
                 return
 
             # Step 3: Agent 7 Risk Manager validation
@@ -753,7 +801,7 @@ class ResearcherBot:
         except Exception as e:
             logger.error(f'Error processing token: {e}')
     
-    async def _token_analyzed_recently(self, token_address: str, hours: int = 24) -> bool:
+    async def _token_analyzed_recently(self, token_address: str, hours: int = 12) -> bool:
         """Check if token was analyzed in the last N hours (Async)"""
         try:
             from datetime import datetime, timedelta

@@ -1,0 +1,59 @@
+# Crypto Trading Bot API Usage Audit
+
+This document provides a detailed mapping of external API dependencies across the 9-agent pipeline and core system services.
+
+## Summary of External Dependencies
+
+The trading bot interacts with 4 primary categories of external APIs:
+1.  **Market Data**: For price feeds, token metadata, and historical klines.
+2.  **Blockchain Explorers/RPC**: For on-chain analysis and wallet tracking (Solana).
+3.  **Social/News**: For sentiment analysis and discovery intel.
+4.  **LLM Providers**: For strategic decision-making and performance analysis.
+
+---
+
+## Agent API Mapping
+
+| Agent | Name | API Dependencies | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Agent 0** | Commander | Anthropic (Claude), Gemini | Intent parsing, strategic command execution. |
+| **Agent 1** | Discovery | Dexscreener, CoinGecko, Reddit, Twitter, Pump.fun, RSS Feeds, Yahoo Finance | Identifying new tokens and tracking trending assets across social/market sources. |
+| **Agent 2** | On-Chain Analyst | Solscan, Rugcheck, Helius, Dexscreener, Yahoo Finance (stocks) | Performing safety audits, checking liquidity, and monitoring stock stability. |
+| **Agent 3** | Wallet Tracker | Helius (REST & Webhooks), Birdeye, Solscan | Tracking "Smart Money" movements and insider wallet activity. |
+| **Agent 4** | Intel Agent | Telethon (Telegram API), LLM Sentiment, Yahoo Finance | Analyzing group sentiment and social intel for tokens and stocks. |
+| **Agent 5** | Signal Aggregator | Internal ML Models (XGBoost), Database | Validating consensus between agents and predicting pump probability. |
+| **Agent 6** | Macro Sentinel | Binance, Bybit, Yahoo Finance, Anthropic/Gemini | Monitoring global macro regimes and technical sentiment. |
+| **Agent 7** | Risk Manager | Anthropic (Claude), Database | Enforcing hard limits and refining trade instructions. |
+| **Agent 8** | Trading Bot | Binance (REST/WS), Bybit, Yahoo Finance, Axiom | Executing paper trades, real-time price monitoring, and observability logs. |
+| **Agent 9** | Performance Analyst| Telegram Bot API, Anthropic (Claude), ML Trainer | Dispatching lifecycle alerts and generating daily/4-hour performance reports. |
+
+---
+
+## Core Services & Clients
+
+### 📡 Researcher Bot
+The main orchestrator for the research division (Agents 1, 2, 3, 4, 6).
+- **APIs**: Solscan, Birdeye, Helius, Dexscreener.
+- **Role**: Coordinates the multi-agent lookup cycle for every discovered token.
+
+### 🤖 Telegram Bot
+The primary interface for the user.
+- **API**: `python-telegram-bot` (Telegram Bot API).
+- **Role**: Receives commands and pushes real-time alerts.
+
+### 🛡️ Rugcheck Client
+Specialized safety client for Solana tokens.
+- **API**: Rugcheck.xyz API.
+- **Role**: Validates holder concentration and contract safety.
+
+### 🧠 LLM Client
+Central utility wrapper for all AI interactions.
+- **APIs**: Anthropic (Sonnet/Haiku), Google Gemini (Flash/Pro).
+- **Strategy**: Implements a "Waterfall Fallback" (e.g., if Sonnet fails, it falls back to Haiku or Gemini).
+
+---
+
+## Verification Notes
+- **API Keys**: All identified APIs rely on environment variables (`.env`) for authentication (e.g., `HELIUS_API_KEY`, `TWITTER_BEARER_TOKEN`).
+- **Rate Limiting**: Agents like Agent 6 and Agent 8 implement fallback strategies (Binance -> Bybit) to handle potential API issues or rate limits.
+- **Error Handling**: Every API call observed in the audit is wrapped in `try/except` blocks with logging to prevent system-wide crashes.

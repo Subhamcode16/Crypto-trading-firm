@@ -35,6 +35,7 @@ class TradeInstruction:
     refinement_reason: Optional[str] = None
     strategy_breakdown: List[str] = field(default_factory=list)
     sl_tp_rationale: Optional[str] = None
+    asset_type: str = 'solana_meme'
 
 
 class Agent7RiskManager:
@@ -262,6 +263,7 @@ class Agent7RiskManager:
         token_symbol   = agent_5_signal.get("token_symbol", "UNKNOWN")
         composite      = agent_5_signal.get("composite_score", 0.0)
         market_regime  = agent_6_result.get("market_regime", "mixed")
+        asset_type     = agent_5_signal.get("asset_type", "solana_meme")
 
         # ── COMMAND OVERRIDES ──
         if self.db:
@@ -311,15 +313,26 @@ class Agent7RiskManager:
             return False, None, cap_reason
 
         # Build SL/TP prices from entry price + configured multiples
-        # NEW: Apply tighter Stop Loss (10%) for Venture tier
         sl_pct = self.stop_loss_pct
-        if composite < 8.0:
-            sl_pct = 0.10  # 10% SL for Low/Venture tiers to protect capital
+        
+        # Branching Risk by Asset Type
+        if asset_type == 'stock':
+            sl_pct = 0.05  # Tight 5% SL for stocks
+            tp1_mult = 1.10 # 10% TP1 for stocks
+            tp2_mult = 1.25 # 25% TP2 for stocks
+            logger.info(f"[AGENT_7] 📈 Stock Risk Profile activated for {token_symbol} (SL: 5%)")
+        elif composite < 8.0:
+            sl_pct = 0.10  # 10% SL for Low/Venture tiers
+            tp1_mult = self.take_profit_1_mult
+            tp2_mult = self.take_profit_2_mult
             logger.info(f"[AGENT_7] 🛡️ Tighter SL activated for {token_symbol} (-10.0%)")
+        else:
+            tp1_mult = self.take_profit_1_mult
+            tp2_mult = self.take_profit_2_mult
 
         sl_price  = entry_price * (1 - sl_pct)
-        tp1_price = entry_price * self.take_profit_1_mult
-        tp2_price = entry_price * self.take_profit_2_mult
+        tp1_price = entry_price * tp1_mult
+        tp2_price = entry_price * tp2_mult
 
         # Generate strategy breakdown and rationale
         strategy_breakdown = []
@@ -364,7 +377,8 @@ class Agent7RiskManager:
             market_regime          = market_regime,
             agent_5_composite      = composite,
             strategy_breakdown     = strategy_breakdown,
-            sl_tp_rationale        = sl_tp_rationale
+            sl_tp_rationale        = sl_tp_rationale,
+            asset_type             = asset_type
         )
 
 

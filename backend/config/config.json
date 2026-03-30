@@ -38,5 +38,14 @@
   "logging": {
     "level": "INFO",
     "format": "json"
+  },
+  "budget": {
+    "daily_ai_limit": 5.0,
+    "monthly_ai_limit": 200.0
+  },
+  "filters": {
+    "min_volume_usd": 10000.0,
+    "min_liquidity_usd": 5000.0,
+    "analysis_cache_hours": 12
   }
 }

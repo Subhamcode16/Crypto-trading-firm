@@ -31,7 +31,7 @@ class RedditClient:
         self.client_id = client_id
         self.client_secret = client_secret
         self.headers = {
-            "User-Agent": "CryptoTradingBot/1.0 by DiscoveryAgent"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         self.client = httpx.AsyncClient(headers=self.headers, timeout=10.0)
         

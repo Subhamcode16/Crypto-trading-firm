@@ -12,6 +12,8 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.config import Config
+
 logger = logging.getLogger('cost_tracker')
 
 class CostTracker:
@@ -21,11 +23,21 @@ class CostTracker:
     HAIKU_OUTPUT_COST = 4.00 / 1_000_000  # $4.00 per 1M output tokens
     
     def __init__(self, cost_log_path='data/costs.json'):
+        self.config = Config()
         self.cost_log_path = Path(cost_log_path)
         self.cost_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.daily_costs = self._load_costs()
         
-        logger.info(f'💰 Cost tracker initialized')
+        # Load limits from config
+        self.daily_limit = float(self.config.get('budget.daily_ai_limit', 5.0))
+        self.monthly_limit = float(self.config.get('budget.monthly_ai_limit', 200.0))
+        
+        logger.info(f'💰 Cost tracker initialized (Daily: ${self.daily_limit} | Monthly: ${self.monthly_limit})')
+
+    def is_budget_exceeded(self) -> bool:
+        """Check if either daily or monthly budget is exceeded"""
+        summary = self.get_cost_summary()
+        return summary['daily_cost'] >= summary['daily_limit'] or summary['monthly_cost'] >= summary['monthly_limit']
     
     def log_haiku_call(self, input_tokens: int, output_tokens: int, token_symbol: str = 'UNKNOWN'):
         """Log a Haiku API call"""
@@ -96,13 +108,13 @@ class CostTracker:
         return {
             'date': today,
             'daily_cost': daily_cost,
-            'daily_limit': 5.00,
-            'daily_percent': (daily_cost / 5.00) * 100,
+            'daily_limit': self.daily_limit,
+            'daily_percent': (daily_cost / self.daily_limit) * 100 if self.daily_limit > 0 else 0,
             'monthly_cost': monthly_cost,
-            'monthly_limit': 200.00,
-            'monthly_percent': (monthly_cost / 200.00) * 100,
-            'warning_daily': daily_cost > 3.75,  # 75% of $5
-            'warning_monthly': monthly_cost > 150.00  # 75% of $200
+            'monthly_limit': self.monthly_limit,
+            'monthly_percent': (monthly_cost / self.monthly_limit) * 100 if self.monthly_limit > 0 else 0,
+            'warning_daily': daily_cost > (self.daily_limit * 0.75),
+            'warning_monthly': monthly_cost > (self.monthly_limit * 0.75)
         }
     
     def check_and_alert(self) -> str:

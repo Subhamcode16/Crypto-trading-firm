@@ -1,7 +1,7 @@
 import logging
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import websockets
 import json
@@ -12,6 +12,7 @@ from src.apis.rss_client import RSSClient
 from src.apis.reddit_client import RedditClient
 from src.apis.twitter_client import TwitterClient
 from src.apis.pumpfun_client import PumpFunClient
+from src.apis.yahoo_finance_client import YahooFinanceClient
 from src.agents.agent_3_wallet_tracker import Agent3WalletTracker
 from src.config import Config
 
@@ -40,6 +41,7 @@ class Agent1Discovery:
         self.reddit = RedditClient()
         self.twitter = TwitterClient(self.config.get_optional_secret('TWITTER_BEARER_TOKEN'))
         self.pumpfun = PumpFunClient()
+        self.yahoo_finance = YahooFinanceClient()
         
         # Tracking & Deduplication
         self.analyzed_recently = {}  # {address: timestamp}
@@ -145,22 +147,43 @@ class Agent1Discovery:
 
         async def get_cg_results():
             try:
-                cg_trending = await self.coingecko.get_trending_solana()
+                # NEW: Expanding beyond trending to get high-cap Solana tokens
+                cg_market_data = await self.coingecko.get_top_solana_tokens(limit=20)
                 results = []
-                if cg_trending:
-                    for c in cg_trending[:5]:
-                        addr = await self._resolve_candidate_address(c)
+                if cg_market_data:
+                    for c in cg_market_data:
+                        addr = c.get('address') or await self._resolve_candidate_address(c)
                         if addr:
                             results.append({
                                 'source': 'coingecko',
                                 'address': addr,
                                 'symbol': c.get('symbol'),
-                                'score': 7.0,
+                                'score': 7.5,
+                                'type': 'solana_token', # Categorized as established token
                                 'raw': c
                             })
                 return results
             except Exception as e:
                 logger.error(f"CoinGecko discovery failed: {e}")
+                return []
+
+        async def get_stock_results():
+            try:
+                # NEW: Traditional stocks discovery
+                stocks = await self.yahoo_finance.get_trending_stocks(limit=10)
+                results = []
+                for s in stocks:
+                    results.append({
+                        'source': 'yahoo_finance',
+                        'address': s.get('symbol'), # Use symbol as unique key for stocks
+                        'symbol': s.get('symbol'),
+                        'score': 8.0 if abs(s.get('change_pct', 0)) > 2 else 7.0,
+                        'type': 'stock',
+                        'raw': s
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Stock discovery failed: {e}")
                 return []
 
         async def get_reddit_results():
@@ -261,7 +284,8 @@ class Agent1Discovery:
             get_rss_results(),
             get_pumpfun_results(),
             get_twitter_results(),
-            get_smart_money_results()
+            get_smart_money_results(),
+            get_stock_results()
         ]
         
         batches = await asyncio.gather(*tasks)
@@ -274,6 +298,13 @@ class Agent1Discovery:
                 if not addr or await self._token_analyzed_recently(addr):
                     continue
                 
+                # Assign default type if missing
+                if 'type' not in lead:
+                    if lead['source'] == 'pumpfun':
+                        lead['type'] = 'solana_meme'
+                    else:
+                        lead['type'] = 'solana_token'
+
                 if addr not in unique_leads or lead['score'] > unique_leads[addr]['score']:
                     unique_leads[addr] = lead
         

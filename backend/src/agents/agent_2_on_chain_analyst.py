@@ -188,10 +188,76 @@ class OnChainAnalyst:
         except Exception as e:
             return False, f"Could not verify: {str(e)}"
 
-    async def analyze_token(self, token_address: str) -> Dict:
-        """Run all 9 filters. First failure = KILLED. All pass = CLEARED."""
-        logger.info(f"[AGENT_2] Analyzing {token_address[:8]}...")
+    async def filter_stability(self, asset_id: str, lead_type: str) -> Tuple[bool, str]:
+        """STABILITY GATE: For Stocks and High-Cap Tokens"""
+        try:
+            if lead_type == 'stock':
+                import yfinance as yf
+                ticker = yf.Ticker(asset_id)
+                info = ticker.info
+                
+                # USER CHOICE: Market Cap > $1B and Volume > $1M
+                mcap = info.get('marketCap', 0)
+                vol = info.get('regularMarketVolume', 0) * info.get('regularMarketPrice', 1) # Approx USD volume
+                
+                if mcap < 1_000_000_000:
+                    return False, f"Stock Cap too low: ${mcap/1e9:.2f}B < $1B"
+                if vol < 1_000_000:
+                    return False, f"Stock Volume too low: ${vol/1e6:.2f}M < $1M"
+                
+                return True, f"Stock Stability: Cap ${mcap/1e9:.1f}B | Vol ${vol/1e6:.1f}M"
+            
+            if not self.dexscreener:
+                return True, "Stability: [API unavailable - PASS]"
+                
+            pairs = await self.dexscreener.get_token_pairs(asset_id)
+            if not pairs: return False, "Stability: No market data"
+            
+            solana_pairs = [p for p in pairs if p.get('chainId') == 'solana']
+            if not solana_pairs: return False, "Stability: No Solana liquidity"
+            
+            best_pair = max(solana_pairs, key=lambda p: float(p.get('liquidity', {}).get('usd', 0)))
+            liq = float(best_pair.get('liquidity', {}).get('usd', 0))
+            vol = float(best_pair.get('volume', {}).get('h24', 0))
+            
+            # Stricter liquidity for non-meme tokens to ensure "stability"
+            if liq < 50000: return False, f"Insufficient Liquidity: ${liq:,.0f}"
+            if vol < 20000: return False, f"Low Volume: ${vol:,.0f}"
+            
+            return True, f"Stability Cleared: Liq ${liq:,.0f} | Vol ${vol:,.0f}"
+        except Exception as e:
+            return False, f"Stability Check Error: {e}"
+
+    async def analyze_token(self, token_address: str, lead_type: str = 'solana_meme') -> Dict:
+        """Run safety gates based on lead type. Bifurcated logic (Rug vs Stability)."""
+        logger.info(f"[AGENT_2] Analyzing {lead_type} asset {token_address[:8]}...")
         
+        # Branching logic based on type
+        if lead_type in ['stock', 'solana_token']:
+            passed, details = await self.filter_stability(token_address, lead_type)
+            if not passed:
+                return {
+                    'status': 'KILLED',
+                    'token_address': token_address,
+                    'lead_type': lead_type,
+                    'killed_at': datetime.utcnow().isoformat(),
+                    'failure_reason': details,
+                    'failed_filter': 'stability_gate'
+                }
+            
+            # High-cap/Stock defaults to high safety
+            return {
+                'status': 'CLEARED',
+                'token_address': token_address,
+                'lead_type': lead_type,
+                'safety_score': 9.5 if lead_type == 'stock' else 8.5,
+                'cleared_at': datetime.utcnow().isoformat(),
+                'filters_passed': ['stability_gate'],
+                'filters_total': 1,
+                'filter_results': {'stability_gate': {'passed': True, 'details': details}}
+            }
+
+        # Route A: Standard Memecoin Rug Detection
         filters = [
             ("contract_age", self.filter_contract_age),
             ("liquidity_locked", self.filter_liquidity_locked),
