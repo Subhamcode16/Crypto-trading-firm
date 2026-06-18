@@ -1,0 +1,25 @@
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "expo": "~56.0.11",
+    "expo-status-bar": "~56.0.4",
+    "nativewind": "^4.2.5",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-css-interop": "^0.2.5",
+    "react-native-reanimated": "4.3.1",
+    "react-native-safe-area-context": "~5.7.0"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "private": true,
+  "devDependencies": {
+    "tailwindcss": "^3.4.19"
+  }
+}

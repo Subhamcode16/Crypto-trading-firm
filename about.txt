@@ -1,0 +1,51 @@
+1. Asset Selector (Top Right)
+These buttons let you switch between the different AI models (BTC/USDT, ETH/USDT, SOL/USDT, XAU/USD). Each one runs entirely independently, so switching will show you the specific thought process for that exact asset.
+
+2. Live Market Data (The large left box)
+This is meant to display an interactive 1-hour Candlestick chart so you can visually see the price action the AI is analyzing. (Note: I can see from your screenshot that the chart is currently rendering blank. This is a common quirk with lightweight-charts needing explicit CSS dimensions. I can patch this instantly for you!)
+
+3. AI Rationale: Latest Signal
+This is the final output of the XGBoost Machine Learning model.
+
+BUY / SELL / HOLD: The action the AI chose based on the data.
+Conf (Confidence): The mathematical probability the model assigned to this trade being successful (e.g., 64.6%). If confidence is too low, the bot stays out of the market.
+4. AI Rationale: Top Contributing Features
+These progress bars show the top 5 technical indicators that mathematically influenced the AI's decision the most. (Note: They are currently displaying as f111, f27, f88... this happens because XGBoost strips the English names during training for processing speed. I will patch the model script to map these back to their human-readable names like rsi_14, macd_signal, or bb_width so you can actually understand them!)
+
+5. AI Rationale: Macro Context
+This shows the broader financial environment the AI checked before making the trade. For example, it looks at the VIX (Fear index) and DXY (US Dollar Strength). If these metrics indicate a massive global market crash, the bot will refuse to trade, regardless of the technical indicators.
+
+6. Live News Feed
+This displays the actual headlines the bot is reading from Cointelegraph and CNBC in real-time.
+
+VADER Score: Every article is given a score from -1.0 (extremely negative) to +1.0 (extremely positive).
+Agg Sentiment: The total average mood of the market. If the AI wants to BUY Bitcoin, but the Agg Sentiment is -0.50 (highly negative), the AI's risk-management constraints will override the model and cancel the trade.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Those Active Positions aren't from your AI bot trading—they are complimentary test coins from Binance!
+
+When you create a new Binance Spot Testnet account and generate API keys, Binance automatically deposits a "care package" into your testnet wallet so you have something to trade with. They give you exactly 10,000 USDT (which is your Virtual Vault balance), plus exactly 1 BTC, 1 ETH, and a few other coins for free.
+
+Because this is Spot Trading, simply owning the coin is considered an "Active Position". Our Live AI Agent scanned your Binance testnet wallet, saw that you own 1 BTC and 1 ETH, and listed them under Active Positions.
+
+The bot is now monitoring those assets. If its predictive AI models trigger a "SELL" signal on BTC or ETH, it will automatically sell those complimentary test coins for USDT!
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Right now, your bot relies heavily on strict mathematical and technical models (like XGBoost and LSTM) to look at numbers, charts, and technical indicators. For the news, it's currently using a very basic tool called VADER, which essentially just scans headlines and counts "happy" and "sad" words to generate that 0.04 score.
+
+We are going to rip that basic word-counter out and replace it with Gemma. The LLM will be tasked with:
+
+Reading the News Like a Human Analyst: Instead of just looking for keywords, Gemma will read the actual RSS headlines and understand the deep context of the market. It will know the difference between "Bitcoin drops 2%" and "Federal Reserve announces emergency rate cut," scoring the macro environment with actual intelligence.
+Generating the "AI Rationale": We will feed the raw technical data (like XGBoost feature importance, VIX, and DXY) directly into Gemma. It will act as the "Brain" that ties the math and the news together, writing out a clear, human-readable paragraph on the dashboard explaining exactly why it is deciding to execute a trade!
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+So every 60 minutes, the bot will:
+
+Fetch the newly closed 1-hour candle data.
+Calculate the latest technical indicators (RSI, MACD, etc.).
+Grab the latest live news and macro context.
+Run the Math Engine.
+If the math proposes a trade, it will wake up Gemma Risk Manager to approve or veto it.

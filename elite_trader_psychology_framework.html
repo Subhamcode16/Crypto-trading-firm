@@ -1,0 +1,210 @@
+
+<style>
+.section { margin-bottom: 2rem; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.pill { padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; border: 0.5px solid transparent; transition: opacity .15s; }
+.pill:hover { opacity: .75; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+.card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px 16px; }
+.card-label { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 4px; }
+.card-val { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+.card-sub { font-size: 12px; color: var(--color-text-secondary); margin-top: 3px; }
+.rule-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.rule-row:last-child { border-bottom: none; }
+.rule-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 15px; }
+.rule-body { flex: 1; }
+.rule-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 2px; }
+.rule-desc { font-size: 12px; color: var(--color-text-secondary); line-height: 1.5; }
+.tab-bar { display: flex; gap: 4px; border-bottom: 0.5px solid var(--color-border-tertiary); margin-bottom: 16px; }
+.tab { padding: 7px 14px; font-size: 13px; color: var(--color-text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -0.5px; transition: color .15s; }
+.tab.active { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); font-weight: 500; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.threshold-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-radius: var(--border-radius-md); background: var(--color-background-secondary); margin-bottom: 6px; }
+.t-label { font-size: 13px; color: var(--color-text-secondary); }
+.t-val { font-size: 13px; font-weight: 500; color: var(--color-text-primary); font-family: var(--font-mono); }
+h2 { font-size: 15px; font-weight: 500; color: var(--color-text-primary); margin: 0 0 4px; }
+.subtitle { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 14px; }
+</style>
+
+<h2 style="sr-only">Elite trader psychology and bot decision framework</h2>
+
+<div class="tab-bar">
+  <div class="tab active" onclick="switchTab('psychology')">Psychology pillars</div>
+  <div class="tab" onclick="switchTab('entry')">Entry rules</div>
+  <div class="tab" onclick="switchTab('exit')">Exit rules</div>
+  <div class="tab" onclick="switchTab('thresholds')">Bot thresholds</div>
+</div>
+
+<div id="tab-psychology" class="tab-panel active">
+  <p class="subtitle">What separates profitable traders at a psychological level</p>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-info);color:var(--color-text-info)"><i class="ti ti-math-function" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Expected value, not win rate</div>
+      <div class="rule-desc">Elite traders are comfortable being wrong 40–50% of the time. What matters is that wins are 2–3× larger than losses. A 45% win rate with 2.5R average win is +EV. Bots must be tuned the same way — never optimize for win rate alone.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-success);color:var(--color-text-success)"><i class="ti ti-shield" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Capital preservation above all</div>
+      <div class="rule-desc">Profitable traders think in terms of "how much can I lose" before "how much can I make." They never risk more than 1–2% of total capital per trade. A 50% drawdown requires a 100% gain to recover. Risk is asymmetric — losses hurt more than gains help.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-warning);color:var(--color-text-warning)"><i class="ti ti-arrows-right-left" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Process over outcome</div>
+      <div class="rule-desc">A losing trade executed correctly is a good trade. A winning trade that broke the rules is a bad trade. Elite traders grade themselves on rule adherence, not P&L on individual trades. This is the hardest mental shift — and the most important one to encode in a bot.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-danger);color:var(--color-text-danger)"><i class="ti ti-brain" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Detachment from individual trades</div>
+      <div class="rule-desc">Losses don't trigger revenge trading. Wins don't trigger overconfidence. Each trade is one sample from a distribution. The edge plays out over hundreds of trades, not one. Bots have a natural advantage here — they don't feel fear or greed, but they can be misconfigured to act as if they do.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-secondary);color:var(--color-text-secondary)"><i class="ti ti-clock" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Patience as a position</div>
+      <div class="rule-desc">Not being in a trade is itself a position. Top traders miss 80% of all moves — intentionally. They wait for high-probability setups where multiple confluences align. Bots should have a minimum confluence score before entering; "doing nothing" must be an explicit valid output.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-info);color:var(--color-text-info)"><i class="ti ti-trending-up" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Asymmetric sizing (pyramid up, not down)</div>
+      <div class="rule-desc">Add to winning positions, never to losing ones. Averaging down is the most common way retail traders blow up accounts. Elite traders scale in as the trade confirms, and scale out as targets are reached — not before, not after panic.</div>
+    </div>
+  </div>
+</div>
+
+<div id="tab-entry" class="tab-panel">
+  <p class="subtitle">Criteria elite traders require before entering a position</p>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-info);color:var(--color-text-info)"><i class="ti ti-layers-intersect" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Multi-timeframe confluence</div>
+      <div class="rule-desc">The signal must align on at least 2 timeframes. Example: weekly trend bullish + daily breakout + 4H entry trigger. A signal on one timeframe alone is noise. Bot rule: require confluence score ≥ 2 before qualifying an entry.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-success);color:var(--color-text-success)"><i class="ti ti-target" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Pre-defined invalidation level</div>
+      <div class="rule-desc">Before entering, know exactly where the trade is wrong. The stop-loss is defined by market structure (below a key low, above a key high), never by a fixed dollar amount. Bot rule: if no clear invalidation level exists structurally, do not enter.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-warning);color:var(--color-text-warning)"><i class="ti ti-chart-candle" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">R:R minimum ≥ 2:1 before entry</div>
+      <div class="rule-desc">Calculate reward:risk before entering, not after. Distance to target ÷ distance to stop must be ≥ 2. If the setup has a 2% stop and only a 3% target, skip it — wait for structure to offer better asymmetry.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-danger);color:var(--color-text-danger)"><i class="ti ti-compass" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Trend alignment (trade with the tide)</div>
+      <div class="rule-desc">Counter-trend trades have lower win rates and require tighter management. Default bias is to trade in the direction of the higher timeframe trend. Bot rule: give a +0.5 confluence bonus when the trade direction matches the 1W EMA200 slope.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-secondary);color:var(--color-text-secondary)"><i class="ti ti-activity" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Volume and liquidity confirmation</div>
+      <div class="rule-desc">Breakouts on low volume fail. Elite traders require volume ≥ 1.5× the 20-period average on the entry candle for breakout trades. In crypto: also confirm that the move is not happening inside an illiquid window (weekends, low-cap altcoins).</div>
+    </div>
+  </div>
+</div>
+
+<div id="tab-exit" class="tab-panel">
+  <p class="subtitle">How elite traders close positions — both winners and losers</p>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-danger);color:var(--color-text-danger)"><i class="ti ti-x" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Hard stop — no negotiation</div>
+      <div class="rule-desc">When price hits the invalidation level, exit immediately. Never move the stop further away. "Hoping" a trade comes back is the #1 cause of catastrophic losses. Bot rule: hard stop must be placed at order entry time, not after. It cannot be widened by any logic.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-success);color:var(--color-text-success)"><i class="ti ti-calculator" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Partial exits at 1R and 2R</div>
+      <div class="rule-desc">Take 30–40% of position off at 1R (stop moved to breakeven). Take another 30–40% at 2R. Let the remainder run with a trailing stop. This guarantees a profitable trade even if the full target is not reached, and keeps exposure in strong moves.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-warning);color:var(--color-text-warning)"><i class="ti ti-arrow-move-right" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Trailing stop (structure-based)</div>
+      <div class="rule-desc">After 1R is banked, trail stop below each successive higher low (for longs). Not a fixed percentage trail — a structural trail. In crypto this often means trailing below the previous 4H candle low. Locks in profit while allowing extended runs.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-info);color:var(--color-text-info)"><i class="ti ti-clock-stop" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Time-based exit (thesis expiry)</div>
+      <div class="rule-desc">If a trade hasn't moved significantly within N candles, exit — even if stop hasn't been hit. Capital tied up in a sideways trade has an opportunity cost. Bot rule: if the trade hasn't reached 0.5R in profit within [24 bars], exit at market and re-evaluate.</div>
+    </div>
+  </div>
+  <div class="rule-row">
+    <div class="rule-icon" style="background:var(--color-background-secondary);color:var(--color-text-secondary)"><i class="ti ti-alert-triangle" aria-hidden="true"></i></div>
+    <div class="rule-body">
+      <div class="rule-title">Volatility-based exit (regime change)</div>
+      <div class="rule-desc">If market volatility spikes significantly (e.g. VIX analog, ATR expansion > 2×), exit or reduce position. The rules that worked in normal conditions don't apply in chaotic markets. Bots must have an emergency derisking mode triggered by volatility conditions.</div>
+    </div>
+  </div>
+</div>
+
+<div id="tab-thresholds" class="tab-panel">
+  <p class="subtitle">Specific threshold values to encode directly into your bot</p>
+
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 13px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; font-size: 11px;">Position sizing</div>
+    <div class="threshold-row"><span class="t-label">Max risk per trade</span><span class="t-val">1% of equity</span></div>
+    <div class="threshold-row"><span class="t-label">Max risk on correlated positions</span><span class="t-val">3% total exposure</span></div>
+    <div class="threshold-row"><span class="t-label">Max simultaneous open trades</span><span class="t-val">3–5 positions</span></div>
+    <div class="threshold-row"><span class="t-label">Max drawdown before halt</span><span class="t-val">5% daily / 15% monthly</span></div>
+  </div>
+
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 11px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px;">Entry filters</div>
+    <div class="threshold-row"><span class="t-label">Minimum R:R ratio</span><span class="t-val">2.0 : 1</span></div>
+    <div class="threshold-row"><span class="t-label">Minimum confluence score</span><span class="t-val">≥ 2 of 4 signals</span></div>
+    <div class="threshold-row"><span class="t-label">Volume vs 20-period avg (breakouts)</span><span class="t-val">≥ 1.5×</span></div>
+    <div class="threshold-row"><span class="t-label">Max spread / slippage allowed</span><span class="t-val">0.1% of entry price</span></div>
+  </div>
+
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 11px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px;">Exit logic</div>
+    <div class="threshold-row"><span class="t-label">Partial exit 1 (reduce 40%)</span><span class="t-val">At +1R</span></div>
+    <div class="threshold-row"><span class="t-label">Partial exit 2 (reduce 30%)</span><span class="t-val">At +2R</span></div>
+    <div class="threshold-row"><span class="t-label">Move stop to breakeven</span><span class="t-val">At +1R</span></div>
+    <div class="threshold-row"><span class="t-label">Time-based exit (no progress)</span><span class="t-val">24 bars (adjust per TF)</span></div>
+    <div class="threshold-row"><span class="t-label">ATR spike exit trigger</span><span class="t-val">ATR > 2× 20-period avg</span></div>
+  </div>
+
+  <div>
+    <div style="font-size: 11px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px;">Statistical edge targets</div>
+    <div class="threshold-row"><span class="t-label">Minimum acceptable win rate</span><span class="t-val">40%</span></div>
+    <div class="threshold-row"><span class="t-label">Target expectancy per trade</span><span class="t-val">> +0.5R</span></div>
+    <div class="threshold-row"><span class="t-label">Profit factor (gross wins / losses)</span><span class="t-val">≥ 1.5</span></div>
+    <div class="threshold-row"><span class="t-label">Backtest sample before live deploy</span><span class="t-val">≥ 200 trades</span></div>
+  </div>
+</div>
+
+<script>
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const ids = ['psychology','entry','exit','thresholds'];
+    t.classList.toggle('active', ids[i] === id);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + id);
+  });
+}
+</script>

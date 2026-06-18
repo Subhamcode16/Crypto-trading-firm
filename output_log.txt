@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "C:\Users\User\OneDrive\Desktop\projects\Crypto-trading-bot\tests\audit_p4_full_system.py", line 11, in <module>
+    from ml_engine.models.kronos_wrapper import KronosEngine
+  File "C:\Users\User\OneDrive\Desktop\projects\Crypto-trading-bot\ml_engine\models\kronos_wrapper.py", line 10, in <module>
+    from .kronos import Kronos, KronosTokenizer, KronosPredictor
+  File "C:\Users\User\OneDrive\Desktop\projects\Crypto-trading-bot\ml_engine\models\kronos\__init__.py", line 1, in <module>
+    from .kronos import KronosTokenizer, Kronos, KronosPredictor
+  File "C:\Users\User\OneDrive\Desktop\projects\Crypto-trading-bot\ml_engine\models\kronos\kronos.py", line 4, in <module>
+    from huggingface_hub import PyTorchModelHubMixin
+ModuleNotFoundError: No module named 'huggingface_hub'

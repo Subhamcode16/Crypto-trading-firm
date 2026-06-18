@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Mail, ShieldAlert, Activity, Monitor, Terminal, Wallet } from 'lucide-react';
+import { LayoutDashboard, Mail, ShieldAlert, Activity, Monitor, Terminal, Wallet, Gamepad2, BrainCircuit } from 'lucide-react';
 import { useMacroStore } from '../../stores/useMacroStore';
 import { useMessageStore } from '../../stores/useMessageStore';
 import { useTradeStore } from '../../stores/useTradeStore';
@@ -19,71 +19,64 @@ export const Header = () => {
     }, [fetchInitialCapital]);
 
     return (
-        <header className="fixed top-2 left-2 right-2 h-16 rpg-panel flex flex-col md:flex-row items-center justify-between z-50 pointer-events-auto">
+        <header className="fixed top-2 left-2 right-2 h-16 comic-panel flex flex-col md:flex-row items-center justify-between z-50 pointer-events-auto bg-white p-2">
             <div className="flex items-center gap-6 w-full md:w-auto overflow-x-auto hide-scrollbar">
 
                 {/* Brand Logo Area */}
-                <div className="flex items-center gap-2">
-                    <Activity size={20} className="text-black" />
-                    <h1 className="text-sm font-bold title-font text-black whitespace-nowrap">
-                        PIXEL FIRM
+                <div className="flex items-center gap-2 bg-springfield-yellow border-2 border-black p-2 shadow-comic-sm">
+                    <Activity size={24} className="text-black" />
+                    <h1 className="text-lg font-comic uppercase text-black whitespace-nowrap tracking-widest leading-none">
+                        Springfield Cap
                     </h1>
                 </div>
 
                 {/* View Navigation Switch */}
-                <div className="flex bg-[#d0d0d0] p-1 border-2 border-white border-b-black border-r-black">
+                <div className="flex bg-white border-4 border-black shadow-comic-sm divide-x-4 divide-black">
                     <button
                         onClick={() => navigate('/')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
+                        className={`flex items-center gap-2 px-4 py-1 text-sm font-comic uppercase transition-colors ${location.pathname === '/' ? 'bg-black text-white' : 'text-black hover:bg-gray-200'} whitespace-nowrap`}
                     >
-                        <Monitor size={12} />
+                        <Monitor size={16} />
                         OFFICE
                     </button>
                     <button
-                        onClick={() => navigate('/dashboard')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/dashboard' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
+                        onClick={() => navigate('/mission')}
+                        className={`flex items-center gap-2 px-4 py-1 text-sm font-comic uppercase transition-colors ${location.pathname === '/mission' ? 'bg-black text-white' : 'text-black hover:bg-gray-200'} whitespace-nowrap`}
                     >
-                        <LayoutDashboard size={12} />
-                        STATS
+                        <Gamepad2 size={16} />
+                        MISSION
                     </button>
                     <button
-                        onClick={() => navigate('/console')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/console' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
+                        onClick={() => navigate('/explain')}
+                        className={`flex items-center gap-2 px-4 py-1 text-sm font-comic uppercase transition-colors ${location.pathname.startsWith('/explain') ? 'bg-black text-white' : 'text-black hover:bg-gray-200'} whitespace-nowrap`}
                     >
-                        <Terminal size={12} />
-                        CONSOLE
-                    </button>
-                    <button
-                        onClick={() => navigate('/account')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] font-bold title-font transition-colors ${location.pathname === '/account' ? 'bg-black text-white shadow-inner' : 'text-black hover:bg-white'} whitespace-nowrap`}
-                    >
-                        <Wallet size={12} />
-                        ACCOUNT
+                        <BrainCircuit size={16} />
+                        NEURAL
                     </button>
                 </div>
 
             </div>
 
             <div className="hidden md:flex items-center gap-4">
-                <div className="rpg-inset flex flex-col items-center min-w-[120px] px-3">
-                    <span className="text-[7px] text-gray-600 uppercase pixel-font mb-1">ACCOUNT BALANCE</span>
-                    <span className={`text-[11px] font-black title-font ${currentBalance >= initialCapital ? 'text-emerald-600' : 'text-red-600'}`}>
+                <div className="bg-white border-4 border-black shadow-comic-sm flex flex-col items-center min-w-[120px] px-3 py-1">
+                    <span className="text-[10px] text-gray-500 font-comic uppercase tracking-wider mb-1">Vault Balance</span>
+                    <span className={`text-sm font-mono font-bold ${currentBalance >= initialCapital ? 'text-radioactive-green' : 'text-burns-red'}`}>
                         ${currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                 </div>
 
                 <div className="flex flex-col items-end">
-                    <span className="text-[7px] text-gray-600 uppercase pixel-font mb-1">REGIME | STATUS</span>
-                    <div className="flex items-center gap-2 py-1 px-2 rpg-inset">
-                        <span className={`text-[9px] font-bold uppercase title-font ${macro.market_regime === 'BULLISH' ? 'text-green-600' :
-                                macro.market_regime === 'CHOPPY' ? 'text-amber-600' :
-                                    macro.market_regime === 'FLAT' ? 'text-gray-500' : 'text-blue-600'
+                    <span className="text-[10px] text-gray-500 font-comic uppercase tracking-wider mb-1">Regime | Status</span>
+                    <div className="flex items-center gap-2 py-1 px-2 border-4 border-black bg-white shadow-comic-sm">
+                        <span className={`text-[10px] font-bold font-comic uppercase ${macro.market_regime === 'BULLISH' ? 'text-radioactive-green' :
+                                macro.market_regime === 'CHOPPY' ? 'text-springfield-yellow text-shadow-sm' :
+                                    macro.market_regime === 'FLAT' ? 'text-gray-500' : 'text-lisa-blue'
                             }`}>
                             {macro.market_regime}
                         </span>
-                        <div className="w-[1px] h-3 bg-black/20 mx-1"></div>
-                        <div className="w-2 h-2 rounded-full border border-black shadow-[inset_1px_1px_2px_rgba(255,255,255,0.7)] bg-green-500 animate-pulse"></div>
-                        <span className="text-[9px] text-black font-bold uppercase title-font">{macro.status}</span>
+                        <div className="w-[2px] h-3 bg-black mx-1"></div>
+                        <div className="w-3 h-3 rounded-full border-2 border-black bg-radioactive-green animate-pulse"></div>
+                        <span className="text-[10px] text-black font-bold font-comic uppercase">{macro.status}</span>
                     </div>
                 </div>
             </div>
@@ -92,17 +85,17 @@ export const Header = () => {
             <nav className="hidden md:flex items-center gap-2">
                 <button
                     onClick={() => setDrawerOpen(!isDrawerOpen)}
-                    className="relative p-2 bg-[#d0d0d0] border-2 border-white border-b-black border-r-black active:border-black active:border-b-white active:border-r-white flex items-center justify-center cursor-pointer group"
+                    className="relative p-2 bg-white border-4 border-black hover:bg-gray-200 flex items-center justify-center cursor-pointer shadow-comic-sm transition-transform active:translate-y-1"
                 >
-                    <Mail size={16} className="text-black group-hover:scale-110 transition-transform" />
+                    <Mail size={20} className="text-black" />
                     {unreadCount > 0 && (
-                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 border border-black flex items-center justify-center animate-bounce">
-                            <span className="text-[8px] text-white font-bold leading-none">{unreadCount}</span>
+                        <div className="absolute -top-2 -right-2 w-6 h-6 bg-burns-red border-2 border-black rounded-full flex items-center justify-center animate-bounce">
+                            <span className="text-xs text-white font-mono font-bold leading-none">{unreadCount}</span>
                         </div>
                     )}
                 </button>
-                <button className="p-2 bg-[#d0d0d0] border-2 border-white border-b-black border-r-black active:border-black active:border-b-white active:border-r-white flex items-center justify-center cursor-pointer">
-                    <ShieldAlert size={16} className="text-red-600" />
+                <button className="p-2 bg-white border-4 border-black hover:bg-gray-200 flex items-center justify-center cursor-pointer shadow-comic-sm transition-transform active:translate-y-1">
+                    <ShieldAlert size={20} className="text-burns-red" />
                 </button>
             </nav>
         </header>

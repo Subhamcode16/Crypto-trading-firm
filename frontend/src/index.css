@@ -1,96 +1,73 @@
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  /* Retro RPG Color Palette */
-  --retro-bg: #8b9bb4;
-  /* Gameboy Advance gray-blue */
-  --retro-panel: #e0e0e0;
-  /* Light grey window background */
-  --retro-border-outer: #ffffff;
-  /* White outer highlight */
-  --retro-border-inner: #000000;
-  /* Black inner shadow */
-  --retro-text: #000000;
-  /* Black text */
-  --retro-text-muted: #555555;
-  --retro-success: #38bdf8;
-  /* Blue for success to match pokemon style */
-  --retro-danger: #ef4444;
-  --retro-warning: #facc15;
+@layer base {
+  body {
+    @apply bg-springfield-bg text-white font-mono overflow-hidden m-0 p-0;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-comic tracking-wide;
+  }
 }
 
-body {
-  background-color: var(--retro-bg);
-  color: var(--retro-text);
-  font-family: 'Press Start 2P', monospace;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  /* Prevent scrolling on the dashboard */
+@layer components {
+  /* Core comic panel class for all Springfield components */
+  .comic-panel {
+    @apply bg-white text-black border-4 border-black rounded-none shadow-comic relative;
+  }
+  
+  /* Inverted comic panel (dark background) */
+  .comic-panel-dark {
+    @apply bg-springfield-bg text-white border-4 border-white rounded-none shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] relative;
+  }
+  
+  /* Warning/Homer panel */
+  .comic-panel-warning {
+    @apply bg-springfield-yellow text-black border-4 border-black rounded-none shadow-comic relative;
+  }
+  
+  /* Hover effects for interactive cards */
+  .comic-hover {
+    @apply transition-all duration-200 hover:-translate-y-1 hover:translate-x-[-2px] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)];
+  }
+
+  /* Standard comic button */
+  .comic-btn {
+    @apply comic-panel bg-springfield-yellow hover:bg-[#e5c30d] text-black font-comic uppercase px-6 py-2 transition-all duration-200 active:translate-y-1 active:translate-x-[2px] active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] comic-hover;
+  }
+
+  /* Marquee animation for the Burns Ticker */
+  .animate-marquee {
+    animation: marquee 25s linear infinite;
+  }
+  
+  .animate-marquee:hover {
+    animation-play-state: paused;
+  }
 }
 
-/* Base Pixel Font utility */
-.pixel-font {
-  font-family: 'Press Start 2P', monospace;
-  font-size: 8px;
-  /* Classic pixel size */
-  line-height: 1.5;
-  text-transform: uppercase;
+@keyframes marquee {
+  0% { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
 }
 
-h1,
-h2,
-h3,
-h4,
-.title-font {
-  font-family: 'Press Start 2P', monospace;
-  letter-spacing: normal;
-}
-
-/* Retro RPG Window Panel */
-.rpg-panel {
-  background-color: var(--retro-panel);
-  border: 4px solid;
-  border-color: var(--retro-border-outer) var(--retro-border-inner) var(--retro-border-inner) var(--retro-border-outer);
-  padding: 12px;
-  color: var(--retro-text);
-  position: relative;
-  /* Add an inner border to simulate depth */
-  box-shadow: inset -2px -2px 0px rgba(0, 0, 0, 0.2), inset 2px 2px 0px rgba(255, 255, 255, 0.5);
-  image-rendering: pixelated;
-}
-
-/* Inset panel for data readouts */
-.rpg-inset {
-  background-color: #ffffff;
-  border: 4px solid;
-  border-color: var(--retro-border-inner) var(--retro-border-outer) var(--retro-border-outer) var(--retro-border-inner);
-  padding: 8px;
-  box-shadow: inset 2px 2px 0px rgba(0, 0, 0, 0.1);
-}
-
-/* Custom Scrollbar for retro panels */
+/* Custom Scrollbar for comic panels */
 ::-webkit-scrollbar {
   width: 12px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--retro-panel);
-  border-left: 2px solid var(--retro-border-inner);
+  @apply bg-mapple-silver border-l-4 border-black;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #a0a0a0;
-  border: 2px solid;
-  border-color: var(--retro-border-outer) var(--retro-border-inner) var(--retro-border-inner) var(--retro-border-outer);
+  @apply bg-springfield-yellow border-y-4 border-l-0 border-r-0 border-black;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #c0c0c0;
+  @apply bg-[#e5c30d];
 }
 
 .hide-scrollbar::-webkit-scrollbar {
@@ -100,23 +77,4 @@ h4,
 .hide-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
-}
-
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
-  border-left: none;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(34, 197, 94, 0.3);
-  border: none;
-  border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(34, 197, 94, 0.5);
 }

@@ -4,18 +4,17 @@ echo ===================================================
 echo 🚀 STARTING CRYPTO TRADING BOT SYSTEM
 echo ===================================================
 
+:: Fix Python encoding on Windows
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+
 :: 0. Clean up existing processes (Ports and Lingering Python)
-echo [SYSTEM] Clearing ports 8000, 8080, 5173 and killing lingering Python processes...
-powershell -Command "Stop-Process -Name python -ErrorAction SilentlyContinue; 8000, 8080, 5173 | ForEach-Object { Get-NetTCPConnection -LocalPort $_ -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } } 2>$null"
+echo [SYSTEM] Clearing ports 8001, 8080, 5173 and killing lingering Python processes...
+powershell -Command "Stop-Process -Name python -ErrorAction SilentlyContinue; 8001, 8080, 5173 | ForEach-Object { Get-NetTCPConnection -LocalPort $_ -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } } 2>$null"
 
-:: 1. Start Backend (Python Autonomous Logic)
-echo [BACKEND] Starting Python Bot Logic...
-:: Use the local virtual environment Python
-start "BACKEND - Bot Logic" cmd /k "cd backend && .\venv\Scripts\python.exe src/main.py"
-
-:: 2. Start Admin API Server (FastAPI)
-echo [API] Starting Admin API Server...
-start "API - Admin Server" cmd /k "cd backend && .\venv\Scripts\python.exe -m uvicorn src.server:app --port 8000 --reload"
+:: 1. Start Admin API Server (FastAPI) & Gamified Agent
+echo [API] Starting Admin API Server and Agent...
+start "API & AGENT - Server" cmd /k "cd backend && .\venv\Scripts\python.exe -m uvicorn src.server:app --port 8001 --reload"
 
 :: 3. Start WebSocket/Scenario Server (Node.js)
 echo [SERVER] Starting Mock API and Scenario Server...

@@ -1,0 +1,56 @@
+﻿2026-03-27 02:31:49,700 [backtest] INFO: ============================================================
+2026-03-27 02:31:49,707 [backtest] INFO: ============================================================
+2026-03-27 02:31:49,707 [backtest] INFO: 
+[TEST 1] Agent 5 ù Signal Aggregator
+2026-03-27 02:31:49,713 [src.agents.agent_5_signal_aggregator] INFO: [AGENT_5] Signal Aggregator initialized
+2026-03-27 02:31:49,734 [src.agents.agent_5_signal_aggregator] INFO: [AGENT_5] Aggregating signal for TEST
+2026-03-27 02:31:49,734 [src.agents.agent_5_signal_aggregator] INFO: [AGENT_5] Market Regime: MIXED
+2026-03-27 02:31:49,734 [src.agents.agent_5_signal_aggregator] INFO: [AGENT_5] Updated weights: A3=40%, A2=25%, A4=20%, A1=15%
+2026-03-27 02:31:49,750 [feature_builder] INFO: [ML] Feature vector saved: C:\Users\User\OneDrive\Desktop\projects\Crypto-trading-bot\backend\src\ml\data\features_signal_TestAddr_1774539109.json
+2026-03-27 02:31:49,762 [backtest] INFO: 
+[TEST 2] Agent 6 ù Macro Sentinel
+2026-03-27 02:31:49,961 [src.agents.agent_6_macro_sentinel] INFO: [AGENT_6] Macro Sentinel initialized with LLMClient (Haiku)
+2026-03-27 02:31:49,961 [src.agents.agent_6_macro_sentinel] INFO: [AGENT_6] Checking macro for MACROTEST
+2026-03-27 02:31:51,925 [httpx] INFO: HTTP Request: GET https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=24 "HTTP/1.1 451 "
+2026-03-27 02:31:51,925 [src.agents.agent_6_macro_sentinel] WARNING: Binance fetch failed for BTCUSDT 1h: Client error '451 ' for url 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=24'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/451. Trying Bybit fallback.
+2026-03-27 02:31:54,015 [httpx] INFO: HTTP Request: GET https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=24 "HTTP/1.1 403 Forbidden"
+2026-03-27 02:31:54,016 [src.agents.agent_6_macro_sentinel] ERROR: Bybit fallback fetch failed for BTCUSDT 1h: Client error '403 Forbidden' for url 'https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=24'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403.
+2026-03-27 02:31:55,781 [httpx] INFO: HTTP Request: GET https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&limit=24 "HTTP/1.1 451 "
+2026-03-27 02:31:55,781 [src.agents.agent_6_macro_sentinel] WARNING: Binance fetch failed for SOLUSDT 1h: Client error '451 ' for url 'https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&limit=24'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/451. Trying Bybit fallback.
+2026-03-27 02:31:57,468 [httpx] INFO: HTTP Request: GET https://api.bybit.com/v5/market/kline?category=spot&symbol=SOLUSDT&interval=60&limit=24 "HTTP/1.1 403 Forbidden"
+2026-03-27 02:31:57,470 [src.agents.agent_6_macro_sentinel] ERROR: Bybit fallback fetch failed for SOLUSDT 1h: Client error '403 Forbidden' for url 'https://api.bybit.com/v5/market/kline?category=spot&symbol=SOLUSDT&interval=60&limit=24'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403.
+2026-03-27 02:31:59,372 [httpx] INFO: HTTP Request: GET https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&limit=40 "HTTP/1.1 451 "
+2026-03-27 02:31:59,373 [src.agents.agent_6_macro_sentinel] WARNING: Binance fetch failed for SOLUSDT 1h: Client error '451 ' for url 'https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&limit=40'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/451. Trying Bybit fallback.
+2026-03-27 02:32:01,210 [httpx] INFO: HTTP Request: GET https://api.bybit.com/v5/market/kline?category=spot&symbol=SOLUSDT&interval=60&limit=40 "HTTP/1.1 403 Forbidden"
+2026-03-27 02:32:01,211 [src.agents.agent_6_macro_sentinel] ERROR: Bybit fallback fetch failed for SOLUSDT 1h: Client error '403 Forbidden' for url 'https://api.bybit.com/v5/market/kline?category=spot&symbol=SOLUSDT&interval=60&limit=40'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403.
+2026-03-27 02:32:01,219 [backtest] INFO: 
+[TEST 3] Agent 7 ù Risk Manager
+2026-03-27 02:32:01,222 [src.agents.agent_7_risk_manager] INFO: [AGENT_7] Risk Manager initialized | HARD LIMIT ENFORCER mode active
+2026-03-27 02:32:01,223 [src.agents.agent_7_risk_manager] INFO: [AGENT_7] Validating trade: RISK_TEST | score=8.70
+2026-03-27 02:32:01,234 [backtest] INFO: 
+[TEST 4] Agent 8 ù Trading Bot
+2026-03-27 02:32:01,535 [src.agents.agent_8_trading_bot] INFO: [AGENT_8] PAPER TRADING mode active (configured via PAPER_TRADING env var).
+2026-03-27 02:32:01,535 [src.agents.agent_8_trading_bot] WARNING: [AGENT_8] AXIOM_API_TOKEN not found. Axiom observability disabled.
+2026-03-27 02:32:02,994 [src.agents.agent_8_trading_bot] WARNING: [AGENT_8] Binance price fetch failed for SOLUSDT: Binance return status 451. Trying Bybit fallback.
+2026-03-27 02:32:04,424 [src.agents.agent_8_trading_bot] WARNING: [AGENT_8] Mock execution totally failed. Falling back to instruction entry price: 0.0001
+2026-03-27 02:32:04,434 [backtest] INFO: 
+[TEST 5] Agent 9 ù Performance Analyst
+2026-03-27 02:32:04,438 [src.ml.learning_loop] INFO: [LEARNING_LOOP] Feedback loop initialized.
+2026-03-27 02:32:04,438 [src.agents.agent_9_performance_analyst] INFO: [AGENT_9] Performance Analyst initialized with Learning Loop + ML Trainer.
+2026-03-27 02:32:04,442 [backtest] INFO: 
+[TEST 6] Multi-Asset Routing (Stock)
+2026-03-27 02:32:04,442 [src.agents.agent_8_trading_bot] INFO: [AGENT_8] PAPER TRADING mode active (configured via PAPER_TRADING env var).
+2026-03-27 02:32:04,442 [src.agents.agent_8_trading_bot] WARNING: [AGENT_8] AXIOM_API_TOKEN not found. Axiom observability disabled.
+2026-03-27 02:32:04,446 [backtest] INFO:   DEBUG: result={'status': 'FILLED', 'position_id': 'pos_stock_1774539124', 'fill_price': 160.0, 'asset_type': 'stock'}
+2026-03-27 02:32:04,449 [backtest] INFO: 
+============================================================
+2026-03-27 02:32:04,449 [backtest] INFO: BACKTEST RESULTS
+2026-03-27 02:32:04,449 [backtest] INFO: ============================================================
+2026-03-27 02:32:04,449 [backtest] INFO:   PASSED: 6
+2026-03-27 02:32:04,449 [backtest] INFO:   FAILED: 0

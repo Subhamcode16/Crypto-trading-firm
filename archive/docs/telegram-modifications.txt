@@ -1,0 +1,581 @@
+"""
+PixelFirm Telegram Bot
+======================
+Features:
+  - Onboarding flow: asks user name + bot name on /start
+  - Free text → Claude Haiku LLM with simulated streaming
+  - Persistent user profiles in MongoDB
+  - Conversation history (last 20 turns) injected into every LLM call
+  - Slash commands: /status /pnl /trades /help /reset
+  - Proactive trade alert push from Agent-8 events
+  - Rate limiting per user to protect LLM quota
+
+Requirements:
+  pip install python-telegram-bot anthropic motor python-dotenv
+
+Environment variables (.env):
+  TELEGRAM_BOT_TOKEN=...
+  ANTHROPIC_API_KEY=...
+  MONGODB_URI=mongodb://localhost:27017
+  MONGODB_DB=pixelfirm
+"""
+
+import asyncio
+import logging
+import os
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+import anthropic
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from telegram import Update, Bot
+from telegram.constants import ChatAction
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ConversationHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# ─────────────────────────────────────────────
+# Config
+# ─────────────────────────────────────────────
+
+load_dotenv()
+
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
+ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY")
+MONGODB_URI      = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB       = os.getenv("MONGODB_DB", "pixelfirm")
+LLM_MODEL        = "claude-haiku-4-5-20251001"
+MAX_HISTORY      = 20        # turns kept in memory per user
+STREAM_CHUNK     = 25        # chars between Telegram edits (avoids flood limits)
+RATE_LIMIT_RPM   = 10        # max LLM calls per user per minute
+
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+)
+log = logging.getLogger("pixelfirm_bot")
+
+# ─────────────────────────────────────────────
+# MongoDB helpers
+# ─────────────────────────────────────────────
+
+_mongo_client: Optional[AsyncIOMotorClient] = None
+
+def get_db():
+    global _mongo_client
+    if _mongo_client is None:
+        _mongo_client = AsyncIOMotorClient(MONGODB_URI)
+    return _mongo_client[MONGODB_DB]
+
+
+async def get_profile(user_id: int) -> Optional[dict]:
+    return await get_db().profiles.find_one({"user_id": user_id})
+
+
+async def save_profile(profile: dict):
+    await get_db().profiles.update_one(
+        {"user_id": profile["user_id"]},
+        {"$set": profile},
+        upsert=True,
+    )
+
+
+async def append_history(user_id: int, role: str, content: str):
+    """Append a turn to conversation history, capping at MAX_HISTORY turns."""
+    profile = await get_profile(user_id)
+    if not profile:
+        return
+    history = profile.get("chat_history", [])
+    history.append({"role": role, "content": content})
+    # keep last MAX_HISTORY messages
+    if len(history) > MAX_HISTORY:
+        history = history[-MAX_HISTORY:]
+    await get_db().profiles.update_one(
+        {"user_id": user_id},
+        {"$set": {"chat_history": history}},
+    )
+
+# ─────────────────────────────────────────────
+# Rate limiter (in-memory, per user)
+# ─────────────────────────────────────────────
+
+_rate_buckets: dict[int, list[float]] = {}
+
+def is_rate_limited(user_id: int) -> bool:
+    now = time.monotonic()
+    window = 60.0
+    bucket = _rate_buckets.get(user_id, [])
+    bucket = [t for t in bucket if now - t < window]
+    if len(bucket) >= RATE_LIMIT_RPM:
+        _rate_buckets[user_id] = bucket
+        return True
+    bucket.append(now)
+    _rate_buckets[user_id] = bucket
+    return False
+
+# ─────────────────────────────────────────────
+# LLM helpers
+# ─────────────────────────────────────────────
+
+_anthropic = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+
+
+def build_system_prompt(profile: dict) -> str:
+    user_name = profile.get("user_name", "Trader")
+    bot_name  = profile.get("bot_name", "PixelBot")
+    return f"""You are {bot_name}, the intelligent trading assistant for PixelFirm — an autonomous Solana memecoin trading platform.
+
+The user's name is {user_name}. Always address them by name naturally (not every single sentence, but regularly).
+
+Your personality:
+- Sharp, direct, and confident — like a seasoned trading desk assistant
+- You know crypto markets, Solana, memecoins, DeFi, and trading deeply
+- You're proactive: if the user says "hey", acknowledge them warmly and give a brief status of the trading system
+- Keep responses concise unless the user asks for detail
+- Use trading terminology naturally but explain jargon when needed
+
+What you have access to:
+- Live trade execution status from Agent-8
+- PnL tracking from Agent-7 (Risk Manager)
+- Market signals from Agent-6 (Macro Sentinel)
+- Full trade history stored in MongoDB
+
+When users ask about trades, PnL, or system status — respond as if you have live access to this data. 
+If you don't have a specific number, say "checking the latest data" and prompt them to use /pnl or /status for live figures.
+
+Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
+"""
+
+
+async def llm_stream_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, profile: dict):
+    """
+    Call Claude Haiku with streaming and simulate live typing by
+    editing a placeholder message as chunks arrive.
+    Telegram rate limits: max ~20 edits/min per message, so we batch chunks.
+    """
+    user_id  = update.effective_user.id
+    user_msg = update.message.text
+
+    if is_rate_limited(user_id):
+        await update.message.reply_text(
+            f"⏳ Slow down, {profile.get('user_name', 'Trader')} — I'm processing fast but there's a limit. Try again in a moment."
+        )
+        return
+
+    # Save user turn to history
+    await append_history(user_id, "user", user_msg)
+
+    # Show typing indicator
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+
+    # Send placeholder that we'll edit
+    placeholder = await update.message.reply_text("▌")
+
+    history = profile.get("chat_history", [])
+    # Build message list (history already includes the user turn we just saved)
+    messages = history if history else [{"role": "user", "content": user_msg}]
+
+    full_response = ""
+    last_edit_len = 0
+
+    try:
+        with _anthropic.messages.stream(
+            model=LLM_MODEL,
+            max_tokens=768,
+            system=build_system_prompt(profile),
+            messages=messages,
+        ) as stream:
+            for chunk in stream.text_stream:
+                full_response += chunk
+                # Edit every STREAM_CHUNK chars to simulate streaming
+                if len(full_response) - last_edit_len >= STREAM_CHUNK:
+                    try:
+                        await placeholder.edit_text(full_response + " ▌")
+                        last_edit_len = len(full_response)
+                    except Exception:
+                        pass  # ignore if edit fails (e.g. message unchanged)
+
+        # Final edit — clean, no cursor
+        await placeholder.edit_text(full_response)
+
+    except anthropic.APIError as e:
+        log.error(f"Anthropic API error: {e}")
+        await placeholder.edit_text("⚠️ LLM error — check API key or quota.")
+        return
+
+    # Save assistant turn to history
+    await append_history(user_id, "assistant", full_response)
+
+# ─────────────────────────────────────────────
+# Onboarding ConversationHandler
+# ─────────────────────────────────────────────
+
+ASK_NAME, ASK_BOT_NAME = range(2)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    profile = await get_profile(user_id)
+
+    if profile and profile.get("onboarded"):
+        bot_name  = profile.get("bot_name", "PixelBot")
+        user_name = profile.get("user_name", "Trader")
+        await update.message.reply_text(
+            f"Welcome back, {user_name}! I'm {bot_name} and I'm online.\n\n"
+            f"PixelFirm is active and monitoring the Solana memecoin markets.\n"
+            f"Type anything to chat, or use /help to see commands."
+        )
+        return ConversationHandler.END
+
+    tg_name = update.effective_user.first_name or "Trader"
+    await update.message.reply_text(
+        f"👋 Welcome to PixelFirm!\n\n"
+        f"I'm your autonomous trading assistant. Let's get you set up.\n\n"
+        f"First — what should I call you? (Your Telegram name is *{tg_name}*, but you can use anything)",
+        parse_mode="Markdown",
+    )
+    return ASK_NAME
+
+
+async def got_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_name = update.message.text.strip()
+    if not user_name or len(user_name) > 32:
+        await update.message.reply_text("Please enter a name (max 32 characters).")
+        return ASK_NAME
+
+    context.user_data["user_name"] = user_name
+    await update.message.reply_text(
+        f"Nice to meet you, *{user_name}*! 🤝\n\n"
+        f"Now — what do you want to name your trading bot? "
+        f"This is the name I'll go by when we talk.\n_(e.g. Pixel, Max, Sigma, Apex...)_",
+        parse_mode="Markdown",
+    )
+    return ASK_BOT_NAME
+
+
+async def got_bot_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    bot_name  = update.message.text.strip()
+    user_name = context.user_data.get("user_name", "Trader")
+    user_id   = update.effective_user.id
+    chat_id   = update.effective_chat.id
+
+    if not bot_name or len(bot_name) > 32:
+        await update.message.reply_text("Please enter a bot name (max 32 characters).")
+        return ASK_BOT_NAME
+
+    profile = {
+        "user_id":      user_id,
+        "chat_id":      chat_id,
+        "user_name":    user_name,
+        "bot_name":     bot_name,
+        "onboarded":    True,
+        "chat_history": [],
+        "created_at":   datetime.now(timezone.utc).isoformat(),
+    }
+    await save_profile(profile)
+
+    await update.message.reply_text(
+        f"🚀 All set, {user_name}!\n\n"
+        f"Your bot is now *{bot_name}* and I'm fully online.\n\n"
+        f"PixelFirm is watching the Solana memecoin markets 24/7.\n"
+        f"Just type anything to talk to me, or use /help to see what I can do.",
+        parse_mode="Markdown",
+    )
+    log.info(f"Onboarded user {user_id} as '{user_name}' with bot name '{bot_name}'")
+    return ConversationHandler.END
+
+
+async def cancel_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Setup cancelled. Send /start whenever you're ready.")
+    return ConversationHandler.END
+
+# ─────────────────────────────────────────────
+# Slash command handlers
+# ─────────────────────────────────────────────
+
+async def _require_profile(update: Update) -> Optional[dict]:
+    """Return profile or prompt user to /start."""
+    profile = await get_profile(update.effective_user.id)
+    if not profile or not profile.get("onboarded"):
+        await update.message.reply_text("Please run /start first to set up your profile.")
+        return None
+    return profile
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    profile = await _require_profile(update)
+    if not profile:
+        return
+    bot_name  = profile.get("bot_name", "PixelBot")
+    user_name = profile.get("user_name", "Trader")
+    await update.message.reply_text(
+        f"Here's what I can do for you, {user_name}:\n\n"
+        f"💬 *Free chat* — just type anything and {bot_name} will reply\n"
+        f"📊 /status — live system status of all 9 agents\n"
+        f"💰 /pnl — today's profit & loss summary\n"
+        f"📋 /trades — last 10 trades executed\n"
+        f"🔄 /reset — clear conversation history\n"
+        f"❓ /help — this message\n\n"
+        f"_Trade alerts are sent automatically when positions open/close._",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    profile = await _require_profile(update)
+    if not profile:
+        return
+    user_name = profile.get("user_name", "Trader")
+    bot_name  = profile.get("bot_name", "PixelBot")
+    # In production: query your agent status from MongoDB/Redis
+    await update.message.reply_text(
+        f"📡 *PixelFirm System Status* — {user_name}\n\n"
+        f"🟢 Agent-1 Data Ingestion    — Online\n"
+        f"🟢 Agent-2 Signal Processor  — Online\n"
+        f"🟢 Agent-3 Sentiment Watch   — Online\n"
+        f"🟢 Agent-4 Pattern Detector  — Online\n"
+        f"🟢 Agent-5 Token Screener    — Online\n"
+        f"🟢 Agent-6 Macro Sentinel    — Online\n"
+        f"🟢 Agent-7 Risk Manager      — Online\n"
+        f"🟢 Agent-8 Trading Bot       — Online\n"
+        f"🟢 Agent-9 Reporting         — Online\n\n"
+        f"_{bot_name} is fully operational._",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    profile = await _require_profile(update)
+    if not profile:
+        return
+    user_name = profile.get("user_name", "Trader")
+    # In production: query Agent-7 MongoDB collections for real figures
+    today = datetime.now(timezone.utc).strftime("%b %d, %Y")
+    await update.message.reply_text(
+        f"💰 *PnL Summary — {today}*\n\n"
+        f"Realized PnL:    +$0.00\n"
+        f"Unrealized PnL:  +$0.00\n"
+        f"Win Rate:        — %\n"
+        f"Trades Today:    0\n\n"
+        f"_Live data from Agent-7 · {user_name}'s portfolio_",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    profile = await _require_profile(update)
+    if not profile:
+        return
+    user_name = profile.get("user_name", "Trader")
+    # In production: query Agent-8 trade log from MongoDB
+    await update.message.reply_text(
+        f"📋 *Last Trades — {user_name}*\n\n"
+        f"No trades executed yet.\n\n"
+        f"_Agent-8 is scanning for signals..._",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    profile = await _require_profile(update)
+    if not profile:
+        return
+    await get_db().profiles.update_one(
+        {"user_id": update.effective_user.id},
+        {"$set": {"chat_history": []}},
+    )
+    await update.message.reply_text(
+        f"🔄 Conversation history cleared, {profile.get('user_name', 'Trader')}. Fresh start!"
+    )
+
+# ─────────────────────────────────────────────
+# Free-text message handler (LLM chat)
+# ─────────────────────────────────────────────
+
+async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route all non-command text to the LLM with streaming."""
+    profile = await get_profile(update.effective_user.id)
+
+    if not profile or not profile.get("onboarded"):
+        await update.message.reply_text(
+            "Hey! Run /start first to set up your PixelFirm profile."
+        )
+        return
+
+    await llm_stream_reply(update, context, profile)
+
+# ─────────────────────────────────────────────
+# Proactive trade alert (called by Agent-8)
+# ─────────────────────────────────────────────
+
+async def push_trade_alert(bot: Bot, user_id: int, trade: dict):
+    """
+    Call this from Agent-8 whenever a trade executes.
+    trade = {
+        "token": "BONK",
+        "side": "BUY",
+        "entry_price": 0.0000234,
+        "size_sol": 0.5,
+        "tx_hash": "abc123...",
+        "pnl": None,  # None for open, float for closed
+    }
+    """
+    profile = await get_profile(user_id)
+    if not profile:
+        log.warning(f"push_trade_alert: no profile for user_id={user_id}")
+        return
+
+    chat_id   = profile.get("chat_id")
+    user_name = profile.get("user_name", "Trader")
+    bot_name  = profile.get("bot_name", "PixelBot")
+
+    if not chat_id:
+        log.warning(f"push_trade_alert: no chat_id for user_id={user_id}")
+        return
+
+    side_emoji = "🟢" if trade["side"] == "BUY" else "🔴"
+    pnl_line   = (
+        f"PnL:         ${trade['pnl']:+.4f}\n"
+        if trade.get("pnl") is not None
+        else ""
+    )
+
+    msg = (
+        f"{side_emoji} *Trade Executed, {user_name}!*\n\n"
+        f"Token:       {trade['token']}\n"
+        f"Side:        {trade['side']}\n"
+        f"Entry:       ${trade['entry_price']:.8f}\n"
+        f"Size:        {trade['size_sol']} SOL\n"
+        f"{pnl_line}"
+        f"Tx:          `{trade.get('tx_hash', 'pending')[:16]}...`\n\n"
+        f"_{bot_name} is monitoring your position._"
+    )
+
+    await bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+    log.info(f"Trade alert sent to user {user_id}: {trade['token']} {trade['side']}")
+
+# ─────────────────────────────────────────────
+# App bootstrap
+# ─────────────────────────────────────────────
+
+def build_app() -> Application:
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    # ── Onboarding ConversationHandler (must be registered first) ──
+    onboarding = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            ASK_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)],
+            ASK_BOT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_bot_name)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_onboarding)],
+        # allow /start to re-enter even if user is mid-conversation
+        allow_reentry=True,
+    )
+    app.add_handler(onboarding)
+
+    # ── Slash commands ──
+    app.add_handler(CommandHandler("help",   cmd_help))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("pnl",    cmd_pnl))
+    app.add_handler(CommandHandler("trades", cmd_trades))
+    app.add_handler(CommandHandler("reset",  cmd_reset))
+
+    # ── Free text → LLM (catch-all, must be last) ──
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
+
+    return app
+
+
+async def main():
+    log.info("Starting PixelFirm Telegram Bot...")
+    app = build_app()
+    await app.initialize()
+    await app.start()
+    log.info("Bot is running. Press Ctrl+C to stop.")
+    await app.updater.start_polling(drop_pending_updates=True)
+    # Keep running until interrupted
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        log.info("Bot stopped.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+#-----------Agent 8 spec-----------
+"""
+Agent-8 Trade Hook Example
+===========================
+Shows how to call push_trade_alert() from your existing Agent-8
+trading bot when a trade executes.
+
+Drop this pattern into your Agent-8 execution callback.
+"""
+
+from telegram import Bot
+from pixelfirm_bot import push_trade_alert
+import asyncio
+import os
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+
+async def on_trade_executed(user_id: int, trade_data: dict):
+    """
+    Called by Agent-8 after every confirmed on-chain transaction.
+    
+    trade_data structure:
+    {
+        "token":       "BONK",
+        "side":        "BUY",          # or "SELL"
+        "entry_price": 0.0000234,
+        "size_sol":    0.5,
+        "tx_hash":     "5xK2m...",
+        "pnl":         None,           # None = open position, float = closed
+    }
+    """
+    bot = Bot(token=TELEGRAM_TOKEN)
+    await push_trade_alert(bot, user_id, trade_data)
+
+
+# ── Example usage inside Agent-8's execution loop ──────────────────────────
+
+async def example_agent8_execution_loop(user_id: int):
+    """Stub showing where to hook in the alert."""
+
+    # ... your existing order execution logic ...
+    tx_result = {
+        "token":       "BONK",
+        "side":        "BUY",
+        "entry_price": 0.0000234,
+        "size_sol":    0.5,
+        "tx_hash":     "5xK2mPqR8vNjTwAb3cDeFgHiJkLmNoPqRsTuVwXyZ",
+        "pnl":         None,
+    }
+
+    # Fire the Telegram alert
+    await on_trade_executed(user_id, tx_result)
+
+
+if __name__ == "__main__":
+    # Test alert with a dummy user_id
+    asyncio.run(example_agent8_execution_loop(user_id=123456789))

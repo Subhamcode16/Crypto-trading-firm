@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Security, Request
+from pydantic import BaseModel
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -143,3 +144,153 @@ async def get_portfolio_balance(request: Request):
     except Exception as e:
         logger.error(f"[ADMIN API] Error fetching balance: {e}")
         return {"status": "error", "message": str(e)}
+
+# --- LIVE TRADING ENDPOINTS ---
+trader_instance = None
+
+@app.on_event("startup")
+async def startup_event():
+    global trader_instance
+    import sys
+    import asyncio
+    from pathlib import Path
+    
+    # Add project root to sys.path so we can import ml_engine
+    project_root = Path(__file__).parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+        
+    from ml_engine.data.mongo_store import MongoStore
+    db = MongoStore()
+    state = db.load_gamification_state()
+    
+    api_key = state.get("binance_api_key")
+    api_secret = state.get("binance_api_secret")
+    testnet = state.get("binance_testnet", True)
+    
+    if api_key and api_secret:
+        from ml_engine.execution.live_trader import LiveTrader
+        trader_instance = LiveTrader(api_key=api_key, api_secret=api_secret, testnet=testnet)
+        logger.info("Live Binance Trader started in background!")
+    else:
+        logger.info("No Binance credentials found. Waiting for UI connection.")
+    
+    async def trading_loop():
+        import time
+        last_eval_time = 0
+        while True:
+            try:
+                if trader_instance and not getattr(app.state, 'is_paused', False):
+                    current_time = time.time()
+                    
+                    # 1. Light Risk Monitor: Check PnL on active positions
+                    await trader_instance.monitor_open_positions()
+                    
+                    # 2. Heavy ML Evaluation: Run every 60 minutes
+                    if current_time - last_eval_time >= 3600:
+                        await trader_instance.evaluate_market()
+                        last_eval_time = current_time
+                        
+            except Exception as e:
+                logger.error(f"Error in Trading loop: {e}")
+            await asyncio.sleep(5 * 60) # Run every 5 minutes
+            
+    asyncio.create_task(trading_loop())
+
+
+class ConnectExchangeRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    testnet: bool = True
+
+@app.post("/api/exchange/connect")
+@limiter.limit("10/minute")
+async def connect_exchange(req: ConnectExchangeRequest, request: Request):
+    global trader_instance
+    try:
+        from ml_engine.execution.live_trader import LiveTrader
+        from ml_engine.data.mongo_store import MongoStore
+        
+        # Save credentials to Mongo
+        db = MongoStore()
+        db.save_gamification_state({
+            "binance_api_key": req.api_key,
+            "binance_api_secret": req.api_secret,
+            "binance_testnet": req.testnet
+        })
+        
+        # Initialize
+        trader_instance = LiveTrader(api_key=req.api_key, api_secret=req.api_secret, testnet=req.testnet)
+        
+        # Trigger an immediate background evaluation
+        import asyncio
+        asyncio.create_task(trader_instance.evaluate_market())
+        
+        return {"status": "success", "message": "Exchange connected successfully!"}
+    except Exception as e:
+        logger.error(f"Error connecting exchange: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/exchange/disconnect")
+@limiter.limit("10/minute")
+async def disconnect_exchange(request: Request):
+    global trader_instance
+    try:
+        from ml_engine.data.mongo_store import MongoStore
+        db = MongoStore()
+        # Save empty credentials
+        db.save_gamification_state({
+            "binance_api_key": "",
+            "binance_api_secret": "",
+            "binance_testnet": True
+        })
+        
+        # Stop trader instance
+        if trader_instance:
+            trader_instance = None
+            
+        return {"status": "success", "message": "Exchange disconnected"}
+    except Exception as e:
+        logger.error(f"Error disconnecting exchange: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/api/agent/status")
+@limiter.limit("60/minute")
+async def get_agent_status(request: Request):
+    if trader_instance is None:
+        return {"status": "WAITING_FOR_CREDENTIALS"}
+    return await trader_instance.get_status()
+
+@app.get("/api/agent/history")
+@limiter.limit("60/minute")
+async def get_agent_history(request: Request):
+    if trader_instance is None:
+        raise HTTPException(status_code=503, detail="Trader not initialized")
+    return {"status": "success", "history": trader_instance.trade_history}
+
+@app.get("/api/agent/explain/{symbol:path}")
+@limiter.limit("60/minute")
+async def get_agent_explain(symbol: str, request: Request):
+    if trader_instance is None:
+        raise HTTPException(status_code=503, detail="Trader not initialized")
+    
+    sym = symbol.replace("-", "/").replace("_", "/")
+    data = trader_instance.explainability_data.get(sym)
+    if not data:
+        data = trader_instance.explainability_data.get(symbol)
+        
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No explainability data found for {symbol}")
+        
+    return {"status": "success", "data": data}
+
+@app.get("/api/agent/news")
+@limiter.limit("60/minute")
+async def get_agent_news(request: Request):
+    if trader_instance is None:
+        raise HTTPException(status_code=503, detail="Trader not initialized")
+    
+    sentiment = trader_instance.sentiment_engine.get_sentiment()
+    return {"status": "success", "data": sentiment}
