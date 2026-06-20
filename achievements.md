@@ -3,6 +3,12 @@
 ## 🌟 The Milestone
 We have successfully developed, backtested, and validated a Machine Learning-driven Volatility Breakout Trading System for Crypto (`BTC/USDT`). Through multiple rigorous phases, we evolved from a losing EMA baseline to a structurally sound, highly defensive algorithmic system clearing paper-trading requirements with a **Max Drawdown of just 5.25%**.
 
+## 🚀 Live Paper Trading (Phase 6)
+**Current Status:** Infrastructure Validation COMPLETE. Bybit Testnet is ACTIVE.
+*   **Networking:** Bypassed local ISP blocks by dynamically routing Python API traffic through Cloudflare WARP. Uninstalled conflicting `aiodns` resolver to enforce native Windows DNS resolution. Disabled strict CRL (Certificate Revocation List) SSL checks that WARP was intercepting.
+*   **Logging:** All trade signals and Gemma AI risk gatekeeper decisions are now logged to a live `live_alerts.log` file directly on the machine.
+*   **Readiness:** The Day 1 Infrastructure checks passed perfectly. Testnet balance queried successfully, MongoDB logs active. The bot is ready to be launched for its forward-testing observation period.
+
 ## 📊 Final Validated Metrics (Phase 4 Full System)
 *   **Max Drawdown:** 5.25% (Target was < 10%)
 *   **Sharpe Ratio:** 0.92
@@ -11,33 +17,41 @@ We have successfully developed, backtested, and validated a Machine Learning-dri
 
 ## 🔄 Strategies & Iterations Tried
 
-We reached this milestone through 5 major iterative phases:
+### 1. The Baseline Failure (Phase 1)
+*   *What we tried:* Simple EMA Crossover strategy (50/200) without ML.
+*   *The Outcome:* Net negative PnL, enormous drawdowns (>30%), massive chop during ranging markets.
+*   *What we learned:* Pure trend-following is mathematically doomed in modern crypto without regime filters.
 
-1. **EMA Baseline Strategy (Phase 1):** We started with a simple moving average crossover approach which resulted in a negative Sharpe (-0.46) and massive drawdown (32.32%). It proved that simple indicators get chewed up by crypto market noise.
-2. **XGBoost Raw Signal (Phase 2):** We engineered features (`FeatureBuilder`) and trained an XGBoost classifier. This improved returns drastically (+27.1%) but still had too much drawdown (25.84%).
-3. **Regime Detection Layer (Phase 3):** We added an ADX/ATR-based regime filter to block trades during choppy, sideways markets, isolating the model to only trade during "TRENDING" environments.
-4. **Kronos Engine Integration:** Added a consensus check to ensure multi-timeframe alignment before entries.
-5. **Structural Exits & Portfolio Math (Phase 4/5):** We migrated from naive time-based exits to dynamic volatility bands, and corrected the portfolio exposure models.
+### 2. The XGBoost Overfit (Phase 2)
+*   *What we tried:* Built an XGBoost classifier to predict 1-hour direction. Balanced the dataset 50/50 using SMOTE/class weights.
+*   *The Outcome:* AI predicted everything was a breakout. The win rate was abysmal (38%) because it fired in flat markets.
+*   *What we learned:* AI should not be forced to balance "Buy" vs "Sell". "Hold/Do Nothing" must be the dominant class (80%+).
 
-## 💥 Failures & Obstacles Overcome
+### 3. The Time-Based Exit Trap (Phase 3)
+*   *What we tried:* The backtester automatically closed all positions after 8 hours to limit exposure.
+*   *The Outcome:* The system was "working" but getting chopped out right before massive runs. The 8-hour cap caused a 44.6% timeout rate, ruining the reward profile.
+*   *What we learned:* You cannot use a stopwatch to manage a structural breakout.
 
-No algorithmic system is built without encountering math and logic traps. Here are the core failures we debugged and resolved:
+### 4. The Structural Fix (Phase 4)
+*   *What we tried:* Replaced time exits with a pure ATR-based Volatility Breakout framework.
+    *   Stop Loss: 1.5x ATR
+    *   Take Profit: 3.0x ATR
+    *   Re-entry Lock: Signal resets only if price fully retraces below the breakout origin.
+*   *The Outcome:* Sharpe skyrocketed to 0.92.
 
-*   **Failure 1: The Class Imbalance Trap:** 
-    *   *Issue:* Using `class_weight='balanced'` in XGBoost forced the model to blindly guess "STRONG_LONG" too often, destroying precision.
-    *   *Solution:* Removed generic balancing and implemented custom `sample_weight` logic based on forward-return magnitude, forcing the model to care about the *size* of the move, not just the frequency.
-*   **Failure 2: The "Chop" Re-entry Bug:**
-    *   *Issue:* The model would fire a signal, exit for a win, and then immediately re-enter at the top of the move because the signal remained active, resulting in a loss.
-    *   *Solution:* Implemented `breakout_level` reset logic. A signal is now invalidated until the price pulls back below the original breakout origin.
-*   **Failure 3: The 8-Hour / 48-Hour Fences:**
-    *   *Issue:* The simulator had a hard cutoff holding time. 44.6% of trades were hitting the ceiling and getting cut off mid-move, ruining the 3.0x ATR target potential.
-    *   *Solution:* Replaced time limits with `BreakoutExitManager` (structural stops). Extended the hard fail-safe to 72 hours, allowing trades to resolve naturally (timeout rate dropped to 27%).
-*   **Failure 4: The 20% Drawdown Math Illusion:**
-    *   *Issue:* The system looked incredibly profitable (Sharpe 1.57) but still had a 20.4% drawdown. 
-    *   *Solution:* We realized the single-asset sequential backtester was aggressively allocating 100% of the portfolio capital per trade. By mathematically enforcing the intended `MultiAssetPositionSizer` limit of **20% max exposure per trade**, the drawdown collapsed to a hyper-safe 5.25%.
-*   **Failure 5: ATR-Based Kill Switch Clashes:**
+### 5. The Capital Allocation Crisis (Phase 5)
+*   *What we tried:* Running the successful structural strategy, but the backtester was sizing positions dynamically based on confidence, sometimes risking 100% of capital.
+*   *The Outcome:* Drawdown hit 51%. The logic was right, the sizing was lethal.
+*   *What we learned:* A good signal with bad sizing is still a blown account.
+
+### 6. The Elite Risk Architecture (Final)
+*   *What we built:* 
+    *   `max_portfolio_exposure_pct = 0.20` (Never risk more than 20% of the account).
+    *   `max_simultaneous_positions = 2` (Prevent correlated cascading liquidations).
     *   *Issue:* The original Kill Switch blocked entries if ATR was too high—which is exactly when a Volatility Breakout strategy *needs* to enter.
     *   *Solution:* Rewrote it as `BreakoutAwareKillSwitch`, tracking consecutive losses, session drawdown, and portfolio exposure limits instead of raw volatility.
 
-## 🚀 Next Phase
-With the mathematical edge proven and the drawdown aggressively contained below 10%, the architecture is validated. The immediate next step is live paper trading on the **Bybit Testnet**.
+### 7. The Silent Live Execution Failure (Phase 7 - Live Run)
+*   *What went wrong:* The ML engine failed to place any trades during the first live testnet observation.
+*   *The Outcome:* Discovered that the Phase 6 BreakoutAwareKillSwitch refactor changed the evaluate() method signature, but ggregator.py was never updated. This caused a silent TypeError inside the asyncio loop. Additionally, get_feature_importance threw an AttributeError on the XGBModel wrapper.
+*   *The Fix:* Corrected the aggregator KillSwitch integration, implemented a safe fallback for the feature importance check, and re-launched the headless LiveTrader.

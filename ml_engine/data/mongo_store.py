@@ -22,6 +22,7 @@ class MongoStore:
             self.gamification_state = self.db["gamification_state"]
             self.trades = self.db["trades"]
             self.ai_logs = self.db["ai_logs"]
+            self.positions = self.db["positions"]
             
         except Exception as e:
             logger.error(f"[MongoStore] Failed to connect to MongoDB: {e}")
@@ -63,6 +64,41 @@ class MongoStore:
             self.ai_logs.insert_one(log)
         except Exception as e:
             logger.error(f"[MongoStore] Error appending AI log: {e}")
+
+    def insert_position(self, position_doc: Dict[str, Any]):
+        try:
+            self.db.positions.insert_one(position_doc)
+        except Exception as e:
+            logger.error(f"[MongoStore] Error inserting position: {e}")
+
+    def get_open_positions(self) -> List[Dict[str, Any]]:
+        try:
+            positions = list(self.db.positions.find({"status": "OPEN"}).sort("_id", 1))
+            # Keep string version of _id for updating later
+            for pos in positions:
+                pos["_id"] = str(pos["_id"])
+            return positions
+        except Exception as e:
+            logger.error(f"[MongoStore] Error fetching open positions: {e}")
+            return []
+
+    def update_position(self, symbol: str, updates: Dict[str, Any]):
+        try:
+            self.db.positions.update_one(
+                {"symbol": symbol, "status": "OPEN"},
+                {"$set": updates}
+            )
+        except Exception as e:
+            logger.error(f"[MongoStore] Error updating position {symbol}: {e}")
+
+    def close_position(self, symbol: str):
+        try:
+            self.db.positions.update_one(
+                {"symbol": symbol, "status": "OPEN"},
+                {"$set": {"status": "CLOSED"}}
+            )
+        except Exception as e:
+            logger.error(f"[MongoStore] Error closing position {symbol}: {e}")
 
     def get_all_trades(self) -> List[Dict[str, Any]]:
         try:

@@ -121,9 +121,11 @@ class SignalAggregator:
             
         # ── Step 0: Kill Switch & Base Regime check ────────────────────────────
         kill_level, kill_reason = 0, "NORMAL"
-        if df_1h is not None and df_4h is not None:
+        if portfolio_state is not None:
             kill_level, kill_reason = self.kill_switch.evaluate(
-                df_1h, df_4h, portfolio_state, macro_context or {}, regime_history or []
+                portfolio=portfolio_state,
+                signal={},
+                breakout_history=trade_ledger or []
             )
             
         if kill_level >= 2:

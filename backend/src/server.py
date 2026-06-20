@@ -268,7 +268,14 @@ async def get_agent_status(request: Request):
 async def get_agent_history(request: Request):
     if trader_instance is None:
         raise HTTPException(status_code=503, detail="Trader not initialized")
-    return {"status": "success", "history": trader_instance.trade_history}
+        
+    # PyMongo mutates dicts to add an ObjectId _id, which breaks FastAPI serialization.
+    # Sanitize the history list before returning.
+    sanitized_history = [
+        {k: str(v) if k == "_id" else v for k, v in trade.items() if k != "_id"} 
+        for trade in trader_instance.trade_history
+    ]
+    return {"status": "success", "history": sanitized_history}
 
 @app.get("/api/agent/explain/{symbol:path}")
 @limiter.limit("60/minute")

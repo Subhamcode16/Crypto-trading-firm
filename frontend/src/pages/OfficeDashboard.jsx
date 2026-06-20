@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Gamepad2, BrainCircuit, Activity, Wallet, Target, Network, KeyRound, LogOut } from 'lucide-react';
+import { Gamepad2, BrainCircuit, Activity, Wallet, Target, Network, KeyRound, LogOut, Terminal as TerminalIcon } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import SimpsonBarometer from '../components/Springfield/SimpsonBarometer';
@@ -234,6 +234,65 @@ export function OfficeDashboard() {
              <SectorIndicators />
           </div>
         </div>
+
+        {/* Live AI Telemetry Stream */}
+        {status?.telemetry && Object.keys(status.telemetry).length > 0 && (
+          <div className="comic-panel p-6 bg-white">
+            <h2 className="text-2xl font-comic uppercase tracking-widest border-b-4 border-black pb-2 mb-4 flex items-center gap-2">
+              <BrainCircuit className="text-burns-red" />
+              Live AI Telemetry Stream
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {Object.entries(status.telemetry).map(([sym, data]) => (
+                <div key={sym} className="border-4 border-black p-4 shadow-comic-sm bg-gray-50 flex flex-col h-full">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="font-comic font-bold text-lg">{sym.replace('-', '/')}</span>
+                    <span className={`px-2 py-1 border-2 border-black font-mono text-sm font-bold ${data.action === 'BUY' ? 'bg-radioactive-green' : data.action === 'SELL' ? 'bg-burns-red text-white' : 'bg-springfield-yellow'}`}>
+                      {data.action}
+                    </span>
+                  </div>
+                  <div className="font-mono text-xs mb-2">
+                    Confidence: <span className="font-bold">{(data.confidence * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="text-sm font-mono flex-1 overflow-y-auto custom-scrollbar pr-1 max-h-40 border-t-2 border-dashed border-gray-400 pt-2 text-gray-800">
+                    {data.llm_rationale || 'Awaiting reasoning...'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Engine Scanner Terminal Feed */}
+        {status?.scanner_logs && status.scanner_logs.length > 0 && (
+          <div className="comic-panel p-0 bg-black overflow-hidden mt-6 flex flex-col h-64 border-4 border-black">
+            <div className="bg-[#111] border-b-2 border-[#00ff41]/30 p-2 flex items-center justify-between">
+              <h2 className="text-[#00ff41] font-mono text-sm uppercase tracking-widest flex items-center gap-2">
+                <TerminalIcon size={16} />
+                Under the Hood: Real-time Math Engine Scan Logs
+              </h2>
+              <div className="flex gap-2">
+                <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
+                <span className="w-3 h-3 rounded-full bg-green-500"></span>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 custom-terminal-scrollbar font-mono text-xs flex flex-col-reverse space-y-reverse space-y-1">
+              {[...status.scanner_logs].reverse().map((log, i) => (
+                <div key={i} className="flex gap-2 text-[#00ff41] hover:bg-[#00ff41]/10 px-1 rounded transition-colors break-words">
+                  <span className="text-[#00ff41]/50 shrink-0">[{log.timestamp}]</span>
+                  <span className="shrink-0 text-white bg-[#00ff41]/20 px-1 rounded">{log.symbol.replace('-', '/')}</span>
+                  <span className={`${log.message.includes('Blocked') ? 'text-yellow-400' : 'text-[#00ff41]'}`}>{log.message}</span>
+                </div>
+              ))}
+            </div>
+            <style dangerouslySetInnerHTML={{ __html: `
+                .custom-terminal-scrollbar::-webkit-scrollbar { width: 6px; }
+                .custom-terminal-scrollbar::-webkit-scrollbar-track { background: #050505; }
+                .custom-terminal-scrollbar::-webkit-scrollbar-thumb { background: #00ff41; border-radius: 3px; }
+            `}} />
+          </div>
+        )}
 
         {/* Navigation Portals */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">

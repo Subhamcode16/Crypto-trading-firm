@@ -3,8 +3,11 @@ import asyncio
 import os
 import json
 import time
+import requests
 import ccxt.async_support as ccxt
+from dotenv import load_dotenv
 import pandas as pd
+import numpy as np
 from typing import Dict, List, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -27,8 +30,12 @@ class LiveTrader:
     Replaces PaperTrader. Uses confidence scores for position sizing.
     """
     def __init__(self, api_key: str, api_secret: str, testnet: bool = True, engine_type: str = "kronos"):
+        load_dotenv()
         self.testnet = testnet
         self.engine_type = engine_type
+
+        api_key = api_key or os.environ.get("BYBIT_API_KEY")
+        api_secret = api_secret or os.environ.get("BYBIT_API_SECRET")
 
         # ── Private API (Demo/Real): ONLY used for authenticated calls ──────────
         # We inject the markets dict so CCXT never calls load_markets(),
@@ -37,12 +44,14 @@ class LiveTrader:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
+            'verify': False, # Cloudflare WARP breaks Windows SSL Revocation checks
             'options': {
                 'defaultType': 'swap',
                 'adjustForTimeDifference': True,
                 'recvWindow': 20000,
             },
         }
+        
         self.exchange = ccxt.bybit(exchange_config)
 
         # Inject pre-built market info — prevents load_markets() ever being called
@@ -78,8 +87,7 @@ class LiveTrader:
 
         # Elite Trader Psychology tracking
         self.circuit_breaker_active = False
-        self.active_position_states = {}
-        self._load_position_states()
+        self._reconciled_on_startup = False
 
         # Response caches (private API)
         self._balance_cache = None
@@ -112,8 +120,37 @@ class LiveTrader:
         self.sentiment_engine = SentimentEngine()
         self.llm_reasoner = GemmaReasoner()
 
+        self._last_hold_llm_times = {}
+        self.scanner_logs = []
+
         self.status = "IDLE"
         self.is_running = True
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Telegram Alerts
+    # ──────────────────────────────────────────────────────────────────────────
+    def _send_telegram(self, message: str):
+        # Always log to local file as requested
+        try:
+            with open("live_alerts.log", "a", encoding="utf-8") as f:
+                f.write(message + "\n")
+        except Exception as e:
+            logger.error(f"[LiveTrader] Failed to write to live_alerts.log: {e}")
+
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        if not bot_token or not chat_id or bot_token == "YOUR_BOT_TOKEN":
+            return
+        
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message}
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except Exception as e:
+            logger.error(f"[LiveTrader] Telegram failed: {e}")
+
+    async def _async_send_telegram(self, message: str):
+        await asyncio.to_thread(self._send_telegram, message)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers: API resilience
@@ -217,7 +254,7 @@ class LiveTrader:
                         pnl_pct = (entry_price - current_price) / entry_price
 
                 active_pos.append({
-                    "symbol": pos_symbol,
+                    "symbol": pos_symbol.replace(':USDT', ''),
                     "side": side,
                     "amount": contracts,
                     "entry_price": entry_price,
@@ -250,86 +287,169 @@ class LiveTrader:
         logger.warning(f"[LiveTrader] Public OHLCV {timeframe} unavailable for {symbol}. Skipping cycle.")
         return None
 
+    async def reconcile_on_startup(self):
+        """Reconciles DB open positions against active Exchange positions."""
+        db_open = self.mongo_db.get_open_positions()
+        exchange_positions = await self.get_positions()
+        exchange_symbols = {p['symbol']: p for p in exchange_positions if p.get('amount', 0) > 0}
+        
+        db_symbols = {p['symbol']: p for p in db_open}
+        
+        for sym, ex_pos in exchange_symbols.items():
+            if sym not in db_symbols:
+                logger.warning(f"[LiveTrader] ⚠️ ORPHANED POSITION DETECTED: {sym} found on exchange but not in MongoDB.")
+                await self.adopt_orphaned_position(sym, ex_pos)
+                
+        for db_pos in db_open:
+            if db_pos['symbol'] not in exchange_symbols:
+                logger.error(f"[LiveTrader] 🚨 MISMATCH: {db_pos['symbol']} is OPEN in DB but missing on exchange!")
+                self.mongo_db.close_position(db_pos['symbol'])
+                self._reconciliation_mismatch = True
+
+    async def calculate_current_atr(self, symbol: str) -> float:
+        """Fetches recent data to calculate a 14-period ATR for stop calculations."""
+        try:
+            df = await self.fetch_live_data(symbol, limit=20, timeframe="1h")
+            if df is not None and not df.empty:
+                high_low = df['high'] - df['low']
+                high_close = (df['high'] - df['close'].shift()).abs()
+                low_close = (df['low'] - df['close'].shift()).abs()
+                ranges = pd.concat([high_low, high_close, low_close], axis=1)
+                true_range = np.max(ranges, axis=1)
+                atr = true_range.rolling(14).mean().iloc[-1]
+                return float(atr)
+        except Exception as e:
+            logger.error(f"[LiveTrader] Error calculating ATR for {symbol}: {e}")
+        
+        # Fallback
+        ticker = await bybit_public.fetch_ticker(symbol)
+        if ticker:
+            return ticker['last'] * 0.015
+        return 0.0
+
+    async def adopt_orphaned_position(self, symbol: str, exchange_position: dict):
+        """Creates a DB record for an untracked exchange position."""
+        current_atr = await self.calculate_current_atr(symbol)
+        entry_price = float(exchange_position.get('entry_price', exchange_position.get('current_price', 0.0)))
+        side = exchange_position.get('side', 'long')
+        amount = float(exchange_position.get('amount', 0.0))
+        
+        position_doc = {
+            "symbol": symbol,
+            "side": side,
+            "entry_price": entry_price,
+            "initial_amount": amount,
+            "amount_remaining": amount,
+            "highest_price": entry_price,
+            "lowest_price": entry_price,
+            "1r_taken": False,
+            "2r_taken": False,
+            "status": "OPEN",
+            "entry_time": str(datetime.now(timezone.utc)),
+            "adopted": True,
+            "adopted_atr": current_atr
+        }
+        self.mongo_db.insert_position(position_doc)
+        logger.info(f"[LiveTrader] ✅ ADOPTED position {symbol} ({side}) into DB with ATR {current_atr:.4f}")
+
     async def monitor_open_positions(self):
-        """High-frequency risk monitor to scalp profits at +2% or cut losses at -1.5%."""
+        """High-frequency risk monitor using MongoDB state."""
         if not self.is_running: return
         
-        positions = await self.get_positions()
-        for pos in positions:
-            symbol = pos['symbol']
+        if not getattr(self, '_reconciled_on_startup', False):
+            await self.reconcile_on_startup()
+            self._reconciled_on_startup = True
             
-            # Find average entry price from trade history
-            buy_prices = []
-            for t in reversed(self.trade_history):
-                if t['symbol'] == symbol:
-                    if t['type'] == 'SELL': break
-                    if t['type'] == 'BUY': buy_prices.append(t['price'])
-                    
-            if buy_prices:
-                avg_entry = sum(buy_prices) / len(buy_prices)
-                current_price = pos['current_price']
-                pnl_pct = (current_price - avg_entry) / avg_entry
+        open_positions = self.mongo_db.get_open_positions()
+        if not open_positions: return
+        
+        exchange_positions = await self.get_positions()
+        exchange_symbols = {p['symbol']: p for p in exchange_positions if p.get('amount', 0) > 0}
+        
+        for db_pos in open_positions:
+            symbol = db_pos['symbol']
+            
+            if symbol not in exchange_symbols:
+                logger.warning(f"[LiveTrader] DB shows {symbol} OPEN, but not found on exchange. Marking CLOSED.")
+                self.mongo_db.close_position(symbol)
+                continue
                 
-                # Elite Trader Framework: Multi-stage partial exits and trailing stop
-                state = self.active_position_states.get(symbol)
-                if state:
-                    # Update highest price for trailing stop
-                    state["highest_price"] = max(state["highest_price"], current_price)
-                    self._save_position_states()
+            ex_pos = exchange_symbols[symbol]
+            current_price = ex_pos['current_price']
+            avg_entry = db_pos['entry_price']
+            side = db_pos['side']
+            
+            pnl_pct = (current_price - avg_entry) / avg_entry
+            if side == "short":
+                pnl_pct = -pnl_pct
+                
+            # Update extremes
+            new_high = max(db_pos.get("highest_price", avg_entry), current_price)
+            new_low = min(db_pos.get("lowest_price", avg_entry), current_price)
+            
+            # Save updates if changed
+            updates = {}
+            if new_high > db_pos.get("highest_price", 0):
+                updates["highest_price"] = new_high
+            if new_low < db_pos.get("lowest_price", float('inf')):
+                updates["lowest_price"] = new_low
+                
+            # Execute logic
+            r1_pct = 0.015
+            r2_pct = 0.030
+            trail_pct = 0.015
+            
+            action_taken = False
+            close_all = False
+            amount_pct_to_sell = 0.0
+            
+            # 1R Target (40% off)
+            if pnl_pct >= r1_pct and not db_pos.get("1r_taken", False):
+                logger.info(f"[LiveTrader] 🎯 1R HIT: Taking 40% profit for {symbol} at {pnl_pct*100:.2f}%.")
+                updates["1r_taken"] = True
+                amount_pct_to_sell = 0.40
+                action_taken = True
+                
+            # 2R Target (50% of remaining 60%)
+            elif pnl_pct >= r2_pct and not db_pos.get("2r_taken", False) and db_pos.get("1r_taken", False):
+                logger.info(f"[LiveTrader] 🎯 2R HIT: Taking 30% profit for {symbol} at {pnl_pct*100:.2f}%.")
+                updates["2r_taken"] = True
+                amount_pct_to_sell = 0.50
+                action_taken = True
+                
+            # Stop Losses
+            elif not db_pos.get("1r_taken", False) and pnl_pct <= -r1_pct:
+                logger.info(f"[LiveTrader] 🛑 HARD STOP HIT: Cutting loss for {symbol} at {pnl_pct*100:.2f}%.")
+                amount_pct_to_sell = 1.0
+                action_taken = True
+                close_all = True
+            elif db_pos.get("1r_taken", False) and pnl_pct <= 0:
+                logger.info(f"[LiveTrader] 🛡️ BREAKEVEN STOP HIT: Stopping out remaining {symbol}.")
+                amount_pct_to_sell = 1.0
+                action_taken = True
+                close_all = True
+            elif db_pos.get("2r_taken", False):
+                extreme_price = db_pos.get("lowest_price", avg_entry) if side == "short" else db_pos.get("highest_price", avg_entry)
+                drawdown_from_peak = (current_price - extreme_price) / extreme_price
+                if side == "short":
+                    drawdown_from_peak = -drawdown_from_peak
                     
-                    r1_pct = 0.015
-                    r2_pct = 0.030
-                    trail_pct = 0.015
-                    
-                    # 1R Target (40% off, stop to breakeven)
-                    if pnl_pct >= r1_pct and not state.get("1r_taken", False):
-                        logger.info(f"[LiveTrader] 🎯 1R HIT: Taking 40% profit for {symbol} at {pnl_pct*100:.2f}%. Stop moved to breakeven.")
-                        state["1r_taken"] = True
-                        self._save_position_states()
-                        await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=0.40)
-                        continue
-                        
-                    # 2R Target (30% of original off, which is 50% of remaining 60%)
-                    if pnl_pct >= r2_pct and not state.get("2r_taken", False) and state.get("1r_taken", False):
-                        logger.info(f"[LiveTrader] 🎯 2R HIT: Taking 30% profit for {symbol} at {pnl_pct*100:.2f}%.")
-                        state["2r_taken"] = True
-                        self._save_position_states()
-                        await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=0.50)
-                        continue
-                        
-                    # Stop Losses & Trailing Stop
-                    if not state.get("1r_taken", False) and pnl_pct <= -r1_pct:
-                        logger.info(f"[LiveTrader] 🛑 HARD STOP HIT: Cutting loss for {symbol} at {pnl_pct*100:.2f}%.")
-                        await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=1.0)
-                    elif state.get("1r_taken", False) and pnl_pct <= 0:
-                        logger.info(f"[LiveTrader] 🛡️ BREAKEVEN STOP HIT: Stopping out remaining {symbol}.")
-                        await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=1.0)
-                    elif state.get("2r_taken", False):
-                        # Trailing stop for the final 30%
-                        drawdown_from_peak = (current_price - state["highest_price"]) / state["highest_price"]
-                        if drawdown_from_peak <= -trail_pct:
-                            logger.info(f"[LiveTrader] 🏃 TRAILING STOP HIT: Exiting runner for {symbol} after {drawdown_from_peak*100:.2f}% drop from peak.")
-                            await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=1.0)
-                else:
-                    # Fallback if no state exists
-                    if pnl_pct >= 0.02 or pnl_pct <= -0.015:
-                        logger.info(f"[LiveTrader] 🚨 SWING TRIGGER (Fallback): Auto-closing {symbol} at PnL {pnl_pct*100:.2f}%")
-                        await self._execute_action(symbol, "SELL", current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=1.0)
+                if drawdown_from_peak <= -trail_pct:
+                    logger.info(f"[LiveTrader] 🏃 TRAILING STOP HIT: Exiting runner for {symbol} at {drawdown_from_peak*100:.2f}% drop from peak.")
+                    amount_pct_to_sell = 1.0
+                    action_taken = True
+                    close_all = True
 
-    def _load_position_states(self):
-        try:
-            if os.path.exists('position_states.json'):
-                with open('position_states.json', 'r') as f:
-                    self.active_position_states = json.load(f)
-        except Exception as e:
-            logger.error(f"[LiveTrader] Error loading position states: {e}")
+            if updates:
+                self.mongo_db.update_position(symbol, updates)
 
-    def _save_position_states(self):
-        try:
-            with open('position_states.json', 'w') as f:
-                json.dump(self.active_position_states, f, indent=4)
-        except Exception as e:
-            logger.error(f"[LiveTrader] Error saving position states: {e}")
+            if action_taken:
+                # Opposite action to close
+                action_dir = "BUY" if side == "short" else "SELL"
+                await self._execute_action(symbol, action_dir, current_price, str(datetime.now(timezone.utc)), 1.0, amount_pct=amount_pct_to_sell)
+                if close_all:
+                    self.mongo_db.close_position(symbol)
+
 
     def check_circuit_breaker(self):
         """Halt entries if daily loss exceeds 5% of starting balance."""
@@ -425,7 +545,7 @@ class LiveTrader:
                 portfolio_state = {
                     "equity": self.get_status_sync().get("balance", {}).get("total", 100000.0) if hasattr(self, "get_status_sync") else 100000.0, # Approximate
                     "operator_kill_command": False,
-                    "exchange_balance_mismatch": False # Would need more complex checking
+                    "exchange_balance_mismatch": getattr(self, '_reconciliation_mismatch', False)
                 }
                 
                 agg_result = await self.aggregator.aggregate(
@@ -443,8 +563,24 @@ class LiveTrader:
                 confidence = agg_result["confidence"]
                 regime = agg_result.get("regime", "ranging")
                 
+                log_entry = {
+                    "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    "symbol": symbol,
+                    "raw_action": raw_action,
+                    "raw_confidence": raw_confidence,
+                    "final_action": action,
+                    "regime": regime,
+                    "message": f"Raw Math Engine: {raw_action} ({(raw_confidence*100):.1f}%). Aggregator Output: {action}."
+                }
+                if action == "HOLD" and raw_action != "HOLD":
+                    log_entry["message"] += " -> System Blocked/Filtered by Risk Manager."
+                
+                self.scanner_logs.append(log_entry)
+                if len(self.scanner_logs) > 50:
+                    self.scanner_logs.pop(0)
+                
                 model = self.models.get(symbol)
-                top_features = model.get_feature_importance(top_n=5) if model else {}
+                top_features = model.get_feature_importance(top_n=5) if hasattr(model, "get_feature_importance") else {}
                 
                 self.explainability_data[symbol] = {
                     "chart_data": df[["timestamp", "open", "high", "low", "close", "volume"]].tail(300).to_dict(orient="records"),
@@ -463,8 +599,23 @@ class LiveTrader:
                 # Fetch LLM Rationale and Gatekeeper Decision ONLY if a trade is proposed
                 try:
                     if action == "HOLD":
-                        self.explainability_data[symbol]["llm_rationale"] = "Math Engine recommends HOLD; no risk management override required."
-                        self.explainability_data[symbol]["llm_decision"] = "N/A"
+                        last_gen_time = self._last_hold_llm_times.get(symbol, 0)
+                        now = time.time()
+                        if now - last_gen_time > 3 * 3600:
+                            llm_response = await asyncio.to_thread(
+                                self.llm_reasoner.evaluate_trade_proposal,
+                                symbol, action, confidence, current_price, top_features,
+                                self.explainability_data[symbol]["macro_context"],
+                                live_sentiment.get("headlines", [])
+                            )
+                            self.explainability_data[symbol]["llm_rationale"] = f"[Periodic Hold Review] {llm_response['rationale']}"
+                            self.explainability_data[symbol]["llm_decision"] = llm_response["decision"]
+                            self._last_hold_llm_times[symbol] = now
+                        else:
+                            current_rationale = self.explainability_data[symbol].get("llm_rationale", "")
+                            if not current_rationale or current_rationale == "Generating rationale...":
+                                self.explainability_data[symbol]["llm_rationale"] = "Math Engine recommends HOLD; no risk management override required."
+                            self.explainability_data[symbol]["llm_decision"] = "N/A"
                     else:
                         llm_response = await asyncio.to_thread(
                             self.llm_reasoner.evaluate_trade_proposal,
@@ -492,8 +643,20 @@ class LiveTrader:
                 logger.info(f"[{symbol}] Math Signal: {action} (Conf: {confidence:.2f}) | Price: ${current_price:.2f} | Gemma Verdict: {self.explainability_data[symbol]['llm_decision']}")
                 
                 if action != "HOLD" and self.explainability_data[symbol]["llm_decision"] == "APPROVE":
+                    time_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+                    msg = (
+                        f"[{time_str}] {symbol} Regime: {regime.upper()}\n"
+                        f"[{time_str}] Breakout: {action} | Conf: {confidence:.2f}\n"
+                        f"[{time_str}] LLM: {self.explainability_data[symbol]['llm_decision']}\n"
+                        f"[{time_str}] Kill Switch: {'ACTIVE' if self.circuit_breaker_active else 'GREEN'}\n"
+                        f"[{time_str}] ORDER: {action} {symbol} @ ${current_price:.2f} [TESTNET]"
+                    )
+                    await self._async_send_telegram(msg)
                     await self._execute_action(symbol, action, current_price, timestamp, confidence)
                 elif action != "HOLD" and self.explainability_data[symbol]["llm_decision"] == "VETO":
+                    time_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+                    msg = f"[{time_str}] [{symbol}] Trade VETOED by Gemma Risk Manager."
+                    await self._async_send_telegram(msg)
                     logger.warning(f"[{symbol}] Trade VETOED by Gemma Risk Manager.")
                 
             except Exception as e:
@@ -597,11 +760,19 @@ class LiveTrader:
                     self.trade_history.append(trade_record)
                     self.mongo_db.append_trade(trade_record)
                     
-                    self.active_position_states[symbol] = {
-                        "avg_entry": trade_record["price"], "initial_amount": amount_to_trade, "amount_remaining": amount_to_trade,
-                        "highest_price": trade_record["price"], "lowest_price": trade_record["price"], "1r_taken": False, "2r_taken": False
-                    }
-                    self._save_position_states()
+                    self.mongo_db.insert_position({
+                        "symbol": symbol,
+                        "side": "long",
+                        "entry_price": trade_record["price"],
+                        "initial_amount": amount_to_trade,
+                        "amount_remaining": amount_to_trade,
+                        "highest_price": trade_record["price"],
+                        "lowest_price": trade_record["price"],
+                        "1r_taken": False,
+                        "2r_taken": False,
+                        "status": "OPEN",
+                        "entry_time": timestamp
+                    })
                     
             elif action == "SELL":
                 if pos and pos['side'] == 'long':
@@ -624,11 +795,19 @@ class LiveTrader:
                     self.trade_history.append(trade_record)
                     self.mongo_db.append_trade(trade_record)
                     
-                    self.active_position_states[symbol] = {
-                        "avg_entry": trade_record["price"], "initial_amount": amount_to_trade, "amount_remaining": amount_to_trade,
-                        "highest_price": trade_record["price"], "lowest_price": trade_record["price"], "1r_taken": False, "2r_taken": False
-                    }
-                    self._save_position_states()
+                    self.mongo_db.insert_position({
+                        "symbol": symbol,
+                        "side": "long",
+                        "entry_price": trade_record["price"],
+                        "initial_amount": amount_to_trade,
+                        "amount_remaining": amount_to_trade,
+                        "highest_price": trade_record["price"],
+                        "lowest_price": trade_record["price"],
+                        "1r_taken": False,
+                        "2r_taken": False,
+                        "status": "OPEN",
+                        "entry_time": timestamp
+                    })
         except Exception as e:
             logger.error(f"[LiveTrader] ❌ EXECUTION FAILED FOR {symbol}: {e}")
 
@@ -680,5 +859,15 @@ class LiveTrader:
                 "level": 1 + (len(self.trade_history) // 10),
                 "xp": len(self.trade_history) * 50,
                 "status": self.status
-            }
+            },
+            "telemetry": {
+                sym: {
+                    "action": data["prediction"]["action"],
+                    "confidence": data["prediction"]["confidence"],
+                    "llm_rationale": data.get("llm_rationale", "")
+                }
+                for sym, data in self.explainability_data.items()
+                if "prediction" in data
+            },
+            "scanner_logs": self.scanner_logs
         }
